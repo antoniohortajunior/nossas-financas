@@ -20,6 +20,8 @@ const state = {
   mes: "",
   ano: new Date().getFullYear(),
   mesNum: new Date().getMonth() + 1,
+  mesStart: "",
+  mesEnd: "",
   despesas: [],
   receitas: [],
   orcamento: [],
@@ -274,6 +276,29 @@ function sameMonth(iso, vencimento) {
   return false;
 }
 
+function inWorkMonth(d) {
+  const start = state.mesStart?.slice(0, 10);
+  const end = state.mesEnd?.slice(0, 10);
+  const comp = d.competencia?.slice(0, 10);
+  const venc = d.vencimento?.slice(0, 10);
+  if (start && end && start.length === 10 && end.length === 10) {
+    if (comp && comp >= start && comp <= end) return true;
+    if (venc && venc >= start && venc <= end) return true;
+  }
+  if (d.competenciaRaw) {
+    const raw = String(d.competenciaRaw).toLowerCase();
+    const mon = MONTHS[state.mesNum - 1]?.slice(0, 3).toLowerCase();
+    if (mon && raw.includes(mon) && raw.includes(String(state.ano))) return true;
+  }
+  return sameMonth(d.competencia, d.vencimento);
+}
+
+function isSummaryRow(descricao, joined) {
+  const d = descricao.toLowerCase();
+  const j = joined.toLowerCase();
+  return j.includes("total geral") || j.includes("subtotal") || d.startsWith("total") || j.includes("soma ");
+}
+
 function parseTables(batch) {
   const byRange = {};
   (batch.valueRanges || []).forEach((vr) => {
@@ -285,7 +310,9 @@ function parseTables(batch) {
   state.ano = Number(cfg[1]?.[0] || new Date().getFullYear());
   state.mes = String(cfg[2]?.[0] || MONTHS[new Date().getMonth()]);
   const idxMes = MONTHS.findIndex((m) => m.toLowerCase() === state.mes.toLowerCase());
-  state.mesNum = Number(cfg[3]?.[0] || (idxMes >= 0 ? idxMes + 1 : new Date().getMonth() + 1));
+  state.mesNum = Number(String(cfg[3]?.[0] ?? "").replace(",", ".")) || (idxMes >= 0 ? idxMes + 1 : new Date().getMonth() + 1);
+  state.mesStart = serialToISO(cfg[5]?.[0]);
+  state.mesEnd = serialToISO(cfg[6]?.[0]);
 
   const listas = byRange.Listas || [];
   const pickCol = (c, from = 1) =>
@@ -318,16 +345,20 @@ function parseTables(batch) {
     for (let i = headerRow + 1; i < values.length; i++) {
       const r = values[i] || [];
       const marker = String(r[0] || "");
+      const joined = r.map((x) => String(x || "")).join(" ");
       if (marker.includes("PESQUISA")) continue;
       const descricao = String(r[idx.descricao] ?? "");
       const categoria = String(r[idx.categoria] ?? (kind === "orcamento" ? r[1] : "") ?? "");
       const fonte = kind === "receita" ? String(r[idx.categoria] ?? r[2] ?? "") : "";
       if (kind !== "orcamento" && !descricao && !categoria && !fonte) continue;
       if (kind === "orcamento" && !categoria) continue;
+      if (kind === "despesa" && isSummaryRow(descricao, joined)) continue;
+      const compRaw = idx.competencia != null ? r[idx.competencia] : "";
       rows.push({
         sheetRow: i + 1,
         pago: truthy(r[idx.pago]),
-        competencia: serialToISO(r[idx.competencia]),
+        competenciaRaw: compRaw,
+        competencia: serialToISO(compRaw),
         categoria: categoria || fonte,
         descricao,
         tipo: String(r[idx.tipo] || ""),
@@ -365,7 +396,7 @@ function parseTables(batch) {
 function enrichOrcamentoFromDespesas() {
   const totals = {};
   state.despesas.forEach((d) => {
-    if (!sameMonth(d.competencia, d.vencimento)) return;
+    if (!inWorkMonth(d)) return;
     const cat = d.categoria || "Outros";
     if (!totals[cat]) totals[cat] = { previsto: 0, realizado: 0 };
     totals[cat].previsto += d.previsto;
@@ -401,7 +432,7 @@ function enrichOrcamentoFromDespesas() {
 
 async function batchGetRanges(ranges) {
   const q = ranges.map((r) => `ranges=${encodeURIComponent(r)}`).join("&");
-  return api(`/values:batchGet?${q}&valueRenderOption=UNFORMATTED_VALUE`);
+  return api(`/values:batchGet?${q}&valueRenderOption=FORMATTED_VALUE`);
 }
 
 async function refresh() {
@@ -430,7 +461,7 @@ async function refresh() {
     if (!state.despesas.length) {
       state.hint = "Nenhuma linha na aba Despesas. A planilha precisa das abas Config, Despesas, Receitas e Listas (modelo Minhas Finanças).";
     } else if (!monthCount) {
-      state.hint = `Nenhum lançamento em ${state.mes} ${state.ano}. Na aba Config, ajuste Ano (B5) e Mês (B6), ou confira a coluna Competência nas despesas.`;
+      state.hint = `${state.despesas.length} linha(s) na planilha, ${monthCount} no mês ${state.mes}/${state.ano}. Confira Config (B5/B6) e Competência ou Vencimento.`;
     }
   } catch (err) {
     state.error = err.message;
@@ -441,11 +472,11 @@ async function refresh() {
 }
 
 function monthDespesas() {
-  return state.despesas.filter((d) => sameMonth(d.competencia, d.vencimento));
+  return state.despesas.filter((d) => inWorkMonth(d));
 }
 
 function monthReceitas() {
-  return state.receitas.filter((d) => sameMonth(d.competencia, d.vencimento));
+  return state.receitas.filter((d) => inWorkMonth(d));
 }
 
 function metrics() {
