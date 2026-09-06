@@ -1,5 +1,9 @@
 const KEY = "minhas-financas-config";
 const SCOPE = "https://www.googleapis.com/auth/spreadsheets";
+const DEFAULTS = {
+  spreadsheetUrl: "https://docs.google.com/spreadsheets/d/1jSJaWTpsmrjskUPhQS1fvQxVbs7dpI05NMzT7-IkS-o/edit",
+  clientId: "1012119713797-8tig992brdgokg5uovs3oendceb9e5oj.apps.googleusercontent.com",
+};
 const MONTHS = [
   "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
   "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
@@ -507,6 +511,10 @@ function options(list, selected) {
 }
 
 function setupView() {
+  const cfg = loadConfig();
+  const sheetUrl = cfg.spreadsheetUrl || DEFAULTS.spreadsheetUrl;
+  const clientId = normalizeClientId(cfg.clientId || DEFAULTS.clientId);
+  const origin = typeof location !== "undefined" ? location.origin : "";
   return `
     <div class="app">
       <div class="setup">
@@ -514,21 +522,18 @@ function setupView() {
         <h1>Conectar a planilha</h1>
         <p>Uma vez só. Depois, você e sua esposa entram com o Google e veem os mesmos dados.</p>
         <div class="field">
-          <label>URL ou ID da planilha</label>
-          <input id="sheetUrl" placeholder="https://docs.google.com/spreadsheets/d/..." value="${esc(loadConfig().spreadsheetUrl || "")}" />
+          <label>① URL da planilha Google</label>
+          <input id="sheetUrl" placeholder="https://docs.google.com/spreadsheets/d/..." value="${esc(sheetUrl)}" />
         </div>
         <div class="field">
-          <label>ID do cliente OAuth (tipo aplicativo da web)</label>
-          <input id="clientId" placeholder="....apps.googleusercontent.com" value="${esc(loadConfig().clientId || "")}" />
+          <label>② ID do cliente OAuth (sem https://)</label>
+          <input id="clientId" placeholder="123456-abc.apps.googleusercontent.com" value="${esc(clientId)}" autocapitalize="none" autocorrect="off" spellcheck="false" />
         </div>
-        <p class="muted" style="margin-top:14px">No Google Cloud, em 5 minutos:</p>
-        <ol>
-          <li>Abra <a href="https://console.cloud.google.com/" target="_blank" rel="noopener">console.cloud.google.com</a> e crie um projeto.</li>
-          <li>Ative a <b>API Google Sheets</b>.</li>
-          <li>Tela de consentimento OAuth → Externo → modo <b>Teste</b> → adicione os 2 e-mails.</li>
-          <li>Credenciais → ID do cliente OAuth → <b>Aplicativo da Web</b>.</li>
-          <li>Origens JavaScript autorizadas: cole a URL desta página (incluindo <code>http://localhost:4173</code>).</li>
-        </ol>
+        <p class="muted" style="margin-top:14px;font-size:12px;line-height:1.5">
+          No Google Cloud → Clientes → Origens JavaScript autorizadas, inclua:<br/>
+          <code>${esc(origin || "https://financas.sistemaesatto.com.br")}</code><br/>
+          <code>https://antoniohortajunior.github.io</code>
+        </p>
         <p class="error" id="setupErr">${esc(state.error)}</p>
         <button class="save" id="btnConnect" style="margin:18px 0 0;width:100%">Entrar com Google</button>
       </div>
