@@ -101,8 +101,15 @@ function serialToISO(v) {
     const br = v.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
     if (br) return `${br[3]}-${br[2].padStart(2, "0")}-${br[1].padStart(2, "0")}`;
     if (/^\d{4}-\d{2}-\d{2}/.test(v)) return v.slice(0, 10);
-    const mmy = v.toLowerCase().match(/([a-z]{3,9})\.?\s*(?:de\s*)?(\d{4})/);
-    if (mmy) {
+    const mmy = v.toLowerCase().match(/([a-z]{3,9})[\s./\\-]+(?:de\s*)?(\d{4})/);
+    if (!mmy) {
+      const mmy2 = v.toLowerCase().match(/([a-z]{3,9})\.?\s*(?:de\s*)?(\d{4})/);
+      if (mmy2) {
+        const key = mmy2[1].slice(0, 3);
+        const mon = PT_MONTH[key] || MONTHS.findIndex((m) => m.toLowerCase().startsWith(key)) + 1;
+        if (mon > 0) return `${mmy2[2]}-${String(mon).padStart(2, "0")}-01`;
+      }
+    } else {
       const key = mmy[1].slice(0, 3);
       const mon = PT_MONTH[key] || MONTHS.findIndex((m) => m.toLowerCase().startsWith(key)) + 1;
       if (mon > 0) return `${mmy[2]}-${String(mon).padStart(2, "0")}-01`;
@@ -172,7 +179,7 @@ function mapHeaders(row) {
     pct: ["%"],
     diferenca: ["diferença", "diferenca"],
     situacao: ["situação", "situacao"],
-    pagamento: ["pagamento"],
+    pagamento: ["pagamento", "pagamentos"],
     conta: ["conta"],
     recorrente: ["recorrente"],
     parcela: ["parcela"],
@@ -255,10 +262,12 @@ function pillClass(status) {
   return "p-wait";
 }
 
-function sameMonth(iso) {
+function sameMonth(iso, vencimento) {
   const want = `${state.ano}-${String(state.mesNum).padStart(2, "0")}`;
   const got = cellYM(iso) || ym(iso);
-  return got === want;
+  if (got === want) return true;
+  if (!got && vencimento) return cellYM(vencimento) === want;
+  return false;
 }
 
 function parseTables(batch) {
@@ -346,6 +355,44 @@ function parseTables(batch) {
   state.despesas = d.rows;
   state.receitas = rec.rows;
   state.orcamento = orc.rows;
+  enrichOrcamentoFromDespesas();
+}
+
+function enrichOrcamentoFromDespesas() {
+  const totals = {};
+  state.despesas.forEach((d) => {
+    if (!sameMonth(d.competencia, d.vencimento)) return;
+    const cat = d.categoria || "Outros";
+    if (!totals[cat]) totals[cat] = { previsto: 0, realizado: 0 };
+    totals[cat].previsto += d.previsto;
+    totals[cat].realizado += d.pago ? (d.realizado || d.previsto) : d.realizado;
+  });
+  if (!Object.keys(totals).length) return;
+  const seen = new Set(state.orcamento.map((o) => o.categoria));
+  state.orcamento = state.orcamento.map((o) => {
+    const t = totals[o.categoria];
+    if (!t) return o;
+    const limite = o.limite || 0;
+    const uso = limite ? t.realizado / limite : 0;
+    return {
+      ...o,
+      previsto: t.previsto,
+      realizado: t.realizado,
+      situacao: o.situacao || (uso > 1 ? "estourou" : uso >= 0.9 ? "atenção" : "no limite"),
+    };
+  });
+  for (const [categoria, t] of Object.entries(totals)) {
+    if (seen.has(categoria)) continue;
+    state.orcamento.push({
+      sheetRow: 0,
+      categoria,
+      limite: 0,
+      previsto: t.previsto,
+      realizado: t.realizado,
+      situacao: "sem limite",
+      idx: {},
+    });
+  }
 }
 
 async function batchGetRanges(ranges) {
@@ -390,11 +437,11 @@ async function refresh() {
 }
 
 function monthDespesas() {
-  return state.despesas.filter((d) => sameMonth(d.competencia));
+  return state.despesas.filter((d) => sameMonth(d.competencia, d.vencimento));
 }
 
 function monthReceitas() {
-  return state.receitas.filter((d) => sameMonth(d.competencia));
+  return state.receitas.filter((d) => sameMonth(d.competencia, d.vencimento));
 }
 
 function metrics() {
