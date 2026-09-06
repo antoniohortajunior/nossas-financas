@@ -26,6 +26,7 @@ const state = {
   moreOpen: false,
   editingRow: null,
   toast: "",
+  hint: "",
   form: blankForm(),
 };
 
@@ -73,6 +74,13 @@ function extractSpreadsheetId(input) {
   return "";
 }
 
+function normalizeClientId(input) {
+  return String(input || "")
+    .trim()
+    .replace(/^https?:\/\//i, "")
+    .replace(/\/+$/, "");
+}
+
 function brl(n) {
   const v = Number(n) || 0;
   return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -82,18 +90,35 @@ function pct(n) {
   return `${Math.round((Number(n) || 0) * 10) / 10}%`.replace(".", ",");
 }
 
+const PT_MONTH = {
+  jan: 1, fev: 2, mar: 3, abr: 4, mai: 5, jun: 6,
+  jul: 7, ago: 8, set: 9, out: 10, nov: 11, dez: 12,
+};
+
 function serialToISO(v) {
   if (v == null || v === "") return "";
   if (typeof v === "string") {
     const br = v.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
     if (br) return `${br[3]}-${br[2].padStart(2, "0")}-${br[1].padStart(2, "0")}`;
     if (/^\d{4}-\d{2}-\d{2}/.test(v)) return v.slice(0, 10);
+    const mmy = v.toLowerCase().match(/([a-z]{3,9})\.?\s*(?:de\s*)?(\d{4})/);
+    if (mmy) {
+      const key = mmy[1].slice(0, 3);
+      const mon = PT_MONTH[key] || MONTHS.findIndex((m) => m.toLowerCase().startsWith(key)) + 1;
+      if (mon > 0) return `${mmy[2]}-${String(mon).padStart(2, "0")}-01`;
+    }
     return v;
   }
   if (typeof v === "number") {
     const d = new Date(Math.round((v - 25569) * 86400 * 1000));
-    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   }
+  return "";
+}
+
+function cellYM(v) {
+  const iso = serialToISO(v);
+  if (/^\d{4}-\d{2}/.test(iso)) return iso.slice(0, 7);
   return "";
 }
 
@@ -104,7 +129,8 @@ function isoToBR(iso) {
 }
 
 function ym(iso) {
-  return (iso || "").slice(0, 7);
+  if (/^\d{4}-\d{2}/.test(iso || "")) return iso.slice(0, 7);
+  return cellYM(iso);
 }
 
 function num(v) {
@@ -231,7 +257,8 @@ function pillClass(status) {
 
 function sameMonth(iso) {
   const want = `${state.ano}-${String(state.mesNum).padStart(2, "0")}`;
-  return ym(iso) === want;
+  const got = cellYM(iso) || ym(iso);
+  return got === want;
 }
 
 function parseTables(batch) {
@@ -260,10 +287,15 @@ function parseTables(batch) {
 
   function parseSheet(values, kind) {
     let headerRow = 0;
-    for (let i = 0; i < Math.min(values.length, 12); i++) {
+    for (let i = 0; i < Math.min(values.length, 15); i++) {
       const a = String(values[i][0] || "");
+      if (a.includes("PESQUISA")) continue;
       const joined = values[i].map((x) => String(x || "")).join(" ").toLowerCase();
-      if (a.includes("Pago") || joined.includes("descrição") || joined.includes("descricao") || joined.includes("previsto")) {
+      const hasPago = a.toLowerCase().includes("pago") || joined.includes("pago");
+      const hasDesc = joined.includes("descrição") || joined.includes("descricao");
+      const hasComp = joined.includes("competência") || joined.includes("competencia");
+      const hasPrev = joined.includes("previsto");
+      if (hasPago && (hasDesc || hasComp || hasPrev)) {
         headerRow = i;
         break;
       }
@@ -316,22 +348,39 @@ function parseTables(batch) {
   state.orcamento = orc.rows;
 }
 
+async function batchGetRanges(ranges) {
+  const q = ranges.map((r) => `ranges=${encodeURIComponent(r)}`).join("&");
+  return api(`/values:batchGet?${q}&valueRenderOption=UNFORMATTED_VALUE`);
+}
+
 async function refresh() {
   state.loading = true;
   state.error = "";
+  state.hint = "";
   render();
   try {
-    const q = [
+    const data = await batchGetRanges([
       "Config!B4:B11",
       "Despesas!A1:T400",
       "Receitas!A1:L200",
-      "Orçamento!A1:J30",
       "Listas!A4:L20",
-    ]
-      .map((r) => `ranges=${encodeURIComponent(r)}`)
-      .join("&");
-    const data = await api(`/values:batchGet?${q}&valueRenderOption=UNFORMATTED_VALUE`);
+    ]);
+    try {
+      const orc = await batchGetRanges(["Orçamento!A1:J30"]);
+      data.valueRanges = data.valueRanges.concat(orc.valueRanges);
+    } catch {
+      try {
+        const orc = await batchGetRanges(["Orcamento!A1:J30"]);
+        data.valueRanges = data.valueRanges.concat(orc.valueRanges);
+      } catch (_) {}
+    }
     parseTables(data);
+    const monthCount = monthDespesas().length;
+    if (!state.despesas.length) {
+      state.hint = "Nenhuma linha na aba Despesas. A planilha precisa das abas Config, Despesas, Receitas e Listas (modelo Minhas Finanças).";
+    } else if (!monthCount) {
+      state.hint = `Nenhum lançamento em ${state.mes} ${state.ano}. Na aba Config, ajuste Ano (B5) e Mês (B6), ou confira a coluna Competência nas despesas.`;
+    }
   } catch (err) {
     state.error = err.message;
   } finally {
@@ -475,6 +524,7 @@ function painelView(m) {
       <div class="alert"><span class="dot" style="background:${m.realizado <= m.previsto ? "var(--emerald)" : "var(--rose)"}"></span> ${m.realizado <= m.previsto ? "Despesas ainda dentro do previsto" : "Você já gastou mais do que o previsto"}</div>
       <div class="alert"><span class="dot" style="background:${m.atrasadas ? "var(--rose)" : m.breve ? "var(--amber)" : "var(--emerald)"}"></span> ${m.atrasadas ? `${m.atrasadas} conta(s) atrasada(s)` : m.breve ? `${m.breve} conta(s) vencem em breve` : "Nenhuma conta atrasada"}</div>
       ${state.error ? `<p class="error">${esc(state.error)}</p>` : ""}
+      ${state.hint ? `<div class="alert"><span class="dot" style="background:var(--amber)"></span> ${esc(state.hint)}</div>` : ""}
     </div>`;
 }
 
@@ -762,15 +812,15 @@ function bind() {
 
   on("btnConnect", "click", async () => {
     const url = document.getElementById("sheetUrl").value;
-    const clientId = document.getElementById("clientId").value.trim();
+    const clientId = normalizeClientId(document.getElementById("clientId").value);
     const spreadsheetId = extractSpreadsheetId(url);
     const err = document.getElementById("setupErr");
     if (!spreadsheetId) {
       err.textContent = "Cole a URL completa da planilha.";
       return;
     }
-    if (!clientId.includes("apps.googleusercontent.com")) {
-      err.textContent = "Cole o ID do cliente OAuth do tipo Aplicativo da Web.";
+    if (!/^[0-9]+-[a-z0-9]+\.apps\.googleusercontent\.com$/i.test(clientId)) {
+      err.textContent = "Client ID inválido. Copie de Clientes no Google Cloud (termina em .apps.googleusercontent.com, sem https).";
       return;
     }
     saveConfig({ clientId, spreadsheetId, spreadsheetUrl: url });
@@ -839,8 +889,11 @@ function bind() {
 
 async function boot() {
   const cfg = loadConfig();
-  state.clientId = cfg.clientId || "";
+  state.clientId = normalizeClientId(cfg.clientId || "");
   state.spreadsheetId = cfg.spreadsheetId || "";
+  if (cfg.clientId && state.clientId !== cfg.clientId) {
+    saveConfig({ clientId: state.clientId });
+  }
   render();
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("./sw.js").catch(() => {});
