@@ -1,0 +1,866 @@
+const KEY = "minhas-financas-config";
+const SCOPE = "https://www.googleapis.com/auth/spreadsheets";
+const MONTHS = [
+  "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+  "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
+];
+
+const state = {
+  tab: "painel",
+  clientId: "",
+  spreadsheetId: "",
+  token: null,
+  loading: false,
+  error: "",
+  nome: "",
+  mes: "",
+  ano: new Date().getFullYear(),
+  mesNum: new Date().getMonth() + 1,
+  despesas: [],
+  receitas: [],
+  orcamento: [],
+  listas: { categorias: [], tipos: [], prioridades: [], pagamentos: [], contas: [] },
+  query: "",
+  filtro: "todas",
+  sheetOpen: false,
+  moreOpen: false,
+  editingRow: null,
+  toast: "",
+  form: blankForm(),
+};
+
+function blankForm() {
+  return {
+    pago: false,
+    descricao: "",
+    categoria: "Moradia",
+    tipo: "Variável",
+    vencimento: todayISO(),
+    prioridade: "Média",
+    previsto: "",
+    realizado: "",
+    pagamento: "Pix",
+    conta: "Nubank",
+    recorrente: "Não",
+    parcela: "",
+    observacoes: "",
+  };
+}
+
+function todayISO() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function loadConfig() {
+  try {
+    return JSON.parse(localStorage.getItem(KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function saveConfig(partial) {
+  const next = { ...loadConfig(), ...partial };
+  localStorage.setItem(KEY, JSON.stringify(next));
+}
+
+function extractSpreadsheetId(input) {
+  const text = String(input || "").trim();
+  const m = text.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+  if (m) return m[1];
+  if (/^[a-zA-Z0-9-_]{20,}$/.test(text)) return text;
+  return "";
+}
+
+function brl(n) {
+  const v = Number(n) || 0;
+  return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+}
+
+function pct(n) {
+  return `${Math.round((Number(n) || 0) * 10) / 10}%`.replace(".", ",");
+}
+
+function serialToISO(v) {
+  if (v == null || v === "") return "";
+  if (typeof v === "string") {
+    const br = v.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (br) return `${br[3]}-${br[2].padStart(2, "0")}-${br[1].padStart(2, "0")}`;
+    if (/^\d{4}-\d{2}-\d{2}/.test(v)) return v.slice(0, 10);
+    return v;
+  }
+  if (typeof v === "number") {
+    const d = new Date(Math.round((v - 25569) * 86400 * 1000));
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+  }
+  return "";
+}
+
+function isoToBR(iso) {
+  if (!iso || iso.length < 10) return "";
+  const [y, m, d] = iso.slice(0, 10).split("-");
+  return `${d}/${m}/${y}`;
+}
+
+function ym(iso) {
+  return (iso || "").slice(0, 7);
+}
+
+function num(v) {
+  if (v == null || v === "") return 0;
+  if (typeof v === "number") return v;
+  const s = String(v).replace("R$", "").replace(/\s/g, "").replace(/\./g, "").replace(",", ".");
+  const n = Number(s);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function truthy(v) {
+  return v === true || v === "TRUE" || v === "VERDADEIRO" || v === "Sim" || v === "PAGO";
+}
+
+function colLetter(i) {
+  let n = i + 1;
+  let s = "";
+  while (n > 0) {
+    const r = (n - 1) % 26;
+    s = String.fromCharCode(65 + r) + s;
+    n = Math.floor((n - 1) / 26);
+  }
+  return s;
+}
+
+function mapHeaders(row) {
+  const aliases = {
+    pago: ["pago?", "pago"],
+    competencia: ["competência", "competencia"],
+    categoria: ["categoria"],
+    descricao: ["descrição", "descricao"],
+    tipo: ["tipo"],
+    vencimento: ["vencimento"],
+    prioridade: ["prioridade"],
+    status: ["status"],
+    dias: ["dias"],
+    previsto: ["previsto"],
+    realizado: ["realizado"],
+    pct: ["%"],
+    diferenca: ["diferença", "diferenca"],
+    situacao: ["situação", "situacao"],
+    pagamento: ["pagamento"],
+    conta: ["conta"],
+    recorrente: ["recorrente"],
+    parcela: ["parcela"],
+    observacoes: ["observações", "observacoes"],
+    classe: ["classe", "classe (50-30-20)", "classe 50-30-20"],
+    limite: ["limite", "orçamento mensal", "orcamento mensal"],
+    restante: ["restante"],
+  };
+  const idx = {};
+  (row || []).forEach((h, i) => {
+    const k = String(h || "").trim().toLowerCase();
+    for (const [field, names] of Object.entries(aliases)) {
+      if (names.includes(k)) idx[field] = i;
+    }
+  });
+  return idx;
+}
+
+function waitGoogle() {
+  return new Promise((resolve, reject) => {
+    const t0 = Date.now();
+    const t = setInterval(() => {
+      if (window.google?.accounts?.oauth2) {
+        clearInterval(t);
+        resolve();
+      } else if (Date.now() - t0 > 12000) {
+        clearInterval(t);
+        reject(new Error("Não foi possível carregar o login do Google."));
+      }
+    }, 40);
+  });
+}
+
+let tokenClient = null;
+
+async function api(path, options = {}) {
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${state.spreadsheetId}${path}`;
+  const res = await fetch(url, {
+    ...options,
+    headers: {
+      Authorization: `Bearer ${state.token}`,
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    },
+  });
+  if (res.status === 401) {
+    await login(true);
+    return api(path, options);
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error?.message || `Erro ${res.status} na planilha`);
+  }
+  return data;
+}
+
+function login(silent) {
+  return new Promise((resolve, reject) => {
+    if (!tokenClient) {
+      reject(new Error("Login do Google ainda não está pronto."));
+      return;
+    }
+    tokenClient.callback = (resp) => {
+      if (resp.error) {
+        reject(new Error(resp.error_description || resp.error));
+        return;
+      }
+      state.token = resp.access_token;
+      resolve(resp);
+    };
+    tokenClient.requestAccessToken({ prompt: silent ? "" : "consent" });
+  });
+}
+
+function pillClass(status) {
+  const s = String(status || "").toLowerCase();
+  if (s.includes("pago") || s.includes("recebido") || s.includes("orçamento") || s === "economia") return "p-ok";
+  if (s.includes("breve") || s.includes("atenção")) return "p-warn";
+  if (s.includes("atras") || s.includes("estour")) return "p-bad";
+  return "p-wait";
+}
+
+function sameMonth(iso) {
+  const want = `${state.ano}-${String(state.mesNum).padStart(2, "0")}`;
+  return ym(iso) === want;
+}
+
+function parseTables(batch) {
+  const byRange = {};
+  (batch.valueRanges || []).forEach((vr) => {
+    byRange[vr.range.split("!")[0].replace(/'/g, "")] = vr.values || [];
+  });
+
+  const cfg = byRange.Config || [];
+  state.nome = String(cfg[0]?.[0] || "Olá");
+  state.ano = Number(cfg[1]?.[0] || new Date().getFullYear());
+  state.mes = String(cfg[2]?.[0] || MONTHS[new Date().getMonth()]);
+  const idxMes = MONTHS.findIndex((m) => m.toLowerCase() === state.mes.toLowerCase());
+  state.mesNum = Number(cfg[3]?.[0] || (idxMes >= 0 ? idxMes + 1 : new Date().getMonth() + 1));
+
+  const listas = byRange.Listas || [];
+  const pickCol = (c, from = 1) =>
+    listas.slice(from).map((r) => r[c]).filter((v) => v != null && String(v).trim() !== "");
+  state.listas = {
+    categorias: pickCol(0),
+    tipos: pickCol(6).length ? pickCol(6) : ["Fixo", "Variável", "Parcelado", "Assinatura"],
+    prioridades: pickCol(7).length ? pickCol(7) : ["Alta", "Média", "Baixa"],
+    pagamentos: pickCol(8).length ? pickCol(8) : ["Pix", "Boleto", "Crédito", "Débito"],
+    contas: pickCol(9).length ? pickCol(9) : ["Nubank", "Itaú", "Carteira"],
+  };
+
+  function parseSheet(values, kind) {
+    let headerRow = 0;
+    for (let i = 0; i < Math.min(values.length, 12); i++) {
+      const a = String(values[i][0] || "");
+      const joined = values[i].map((x) => String(x || "")).join(" ").toLowerCase();
+      if (a.includes("Pago") || joined.includes("descrição") || joined.includes("descricao") || joined.includes("previsto")) {
+        headerRow = i;
+        break;
+      }
+    }
+    const idx = mapHeaders(values[headerRow] || []);
+    const rows = [];
+    for (let i = headerRow + 1; i < values.length; i++) {
+      const r = values[i] || [];
+      const marker = String(r[0] || "");
+      if (marker.includes("PESQUISA")) continue;
+      const descricao = String(r[idx.descricao] ?? "");
+      const categoria = String(r[idx.categoria] ?? (kind === "orcamento" ? r[1] : "") ?? "");
+      const fonte = kind === "receita" ? String(r[idx.categoria] ?? r[2] ?? "") : "";
+      if (kind !== "orcamento" && !descricao && !categoria && !fonte) continue;
+      if (kind === "orcamento" && !categoria) continue;
+      rows.push({
+        sheetRow: i + 1,
+        pago: truthy(r[idx.pago]),
+        competencia: serialToISO(r[idx.competencia]),
+        categoria: categoria || fonte,
+        descricao,
+        tipo: String(r[idx.tipo] || ""),
+        vencimento: serialToISO(r[idx.vencimento]),
+        prioridade: String(r[idx.prioridade] || ""),
+        status: String(r[idx.status] || ""),
+        previsto: num(r[idx.previsto]),
+        realizado: num(r[idx.realizado]),
+        pct: num(r[idx.pct]),
+        situacao: String(r[idx.situacao] || ""),
+        pagamento: String(r[idx.pagamento] || ""),
+        conta: String(r[idx.conta] || ""),
+        recorrente: String(r[idx.recorrente] || "Não"),
+        parcela: String(r[idx.parcela] || ""),
+        observacoes: String(r[idx.observacoes] || ""),
+        classe: String(r[idx.classe] || ""),
+        limite: num(r[idx.limite] ?? r[3]),
+        restante: num(r[idx.restante]),
+        idx,
+      });
+    }
+    return { headerRow, idx, rows };
+  }
+
+  const d = parseSheet(byRange.Despesas || [], "despesa");
+  const rec = parseSheet(byRange.Receitas || [], "receita");
+  const orc = parseSheet(byRange.Orçamento || byRange.Orcamento || [], "orcamento");
+  state._despMeta = d;
+  state.despesas = d.rows;
+  state.receitas = rec.rows;
+  state.orcamento = orc.rows;
+}
+
+async function refresh() {
+  state.loading = true;
+  state.error = "";
+  render();
+  try {
+    const q = [
+      "Config!B4:B11",
+      "Despesas!A1:T400",
+      "Receitas!A1:L200",
+      "Orçamento!A1:J30",
+      "Listas!A4:L20",
+    ]
+      .map((r) => `ranges=${encodeURIComponent(r)}`)
+      .join("&");
+    const data = await api(`/values:batchGet?${q}&valueRenderOption=UNFORMATTED_VALUE`);
+    parseTables(data);
+  } catch (err) {
+    state.error = err.message;
+  } finally {
+    state.loading = false;
+    render();
+  }
+}
+
+function monthDespesas() {
+  return state.despesas.filter((d) => sameMonth(d.competencia));
+}
+
+function monthReceitas() {
+  return state.receitas.filter((d) => sameMonth(d.competencia));
+}
+
+function metrics() {
+  const ds = monthDespesas();
+  const rs = monthReceitas();
+  const receitas = rs.reduce((a, x) => a + x.realizado, 0);
+  const previsto = ds.reduce((a, x) => a + x.previsto, 0);
+  const realizado = ds.reduce((a, x) => a + x.realizado, 0);
+  const pagar = ds.filter((x) => !x.pago).reduce((a, x) => a + x.previsto, 0);
+  const atrasadas = ds.filter((x) => String(x.status).toLowerCase().includes("atras")).length;
+  const breve = ds.filter((x) => String(x.status).toLowerCase().includes("breve")).length;
+  const classe = (name) =>
+    state.orcamento
+      .filter((o) => String(o.classe).toLowerCase().includes(name))
+      .reduce((a, x) => a + x.realizado, 0);
+  const nec = classe("necessidade");
+  const des = classe("desejo");
+  const pou = classe("poupan");
+  const limite = state.orcamento.reduce((a, x) => a + (x.limite || 0), 0);
+  return {
+    receitas,
+    previsto,
+    realizado,
+    saldo: receitas - realizado,
+    pagar,
+    atrasadas,
+    breve,
+    uso: previsto ? realizado / previsto : 0,
+    nec,
+    des,
+    pou,
+    necP: receitas ? (nec / receitas) * 100 : 0,
+    desP: receitas ? (des / receitas) * 100 : 0,
+    pouP: receitas ? (pou / receitas) * 100 : 0,
+    limite,
+    usoLimite: limite ? realizado / limite : 0,
+  };
+}
+
+function filteredDespesas() {
+  const q = state.query.trim().toLowerCase();
+  return monthDespesas().filter((d) => {
+    if (state.filtro === "pagar" && d.pago) return false;
+    if (state.filtro === "atrasadas" && !String(d.status).toLowerCase().includes("atras")) return false;
+    if (q && !String(d.descricao).toLowerCase().includes(q) && !String(d.categoria).toLowerCase().includes(q)) {
+      return false;
+    }
+    return true;
+  });
+}
+
+function esc(s) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function options(list, selected) {
+  const items = list.length ? list : [selected].filter(Boolean);
+  return items.map((v) => `<option ${v === selected ? "selected" : ""}>${esc(v)}</option>`).join("");
+}
+
+function setupView() {
+  return `
+    <div class="app">
+      <div class="setup">
+        <div class="hello">Minhas Finanças</div>
+        <h1>Conectar a planilha</h1>
+        <p>Uma vez só. Depois, você e sua esposa entram com o Google e veem os mesmos dados.</p>
+        <div class="field">
+          <label>URL ou ID da planilha</label>
+          <input id="sheetUrl" placeholder="https://docs.google.com/spreadsheets/d/..." value="${esc(loadConfig().spreadsheetUrl || "")}" />
+        </div>
+        <div class="field">
+          <label>ID do cliente OAuth (tipo aplicativo da web)</label>
+          <input id="clientId" placeholder="....apps.googleusercontent.com" value="${esc(loadConfig().clientId || "")}" />
+        </div>
+        <p class="muted" style="margin-top:14px">No Google Cloud, em 5 minutos:</p>
+        <ol>
+          <li>Abra <a href="https://console.cloud.google.com/" target="_blank" rel="noopener">console.cloud.google.com</a> e crie um projeto.</li>
+          <li>Ative a <b>API Google Sheets</b>.</li>
+          <li>Tela de consentimento OAuth → Externo → modo <b>Teste</b> → adicione os 2 e-mails.</li>
+          <li>Credenciais → ID do cliente OAuth → <b>Aplicativo da Web</b>.</li>
+          <li>Origens JavaScript autorizadas: cole a URL desta página (incluindo <code>http://localhost:4173</code>).</li>
+        </ol>
+        <p class="error" id="setupErr">${esc(state.error)}</p>
+        <button class="save" id="btnConnect" style="margin:18px 0 0;width:100%">Entrar com Google</button>
+      </div>
+    </div>`;
+}
+
+function tabs() {
+  return `
+    <nav class="tabs">
+      <button class="tab ${state.tab === "painel" ? "on" : ""}" data-tab="painel">Painel</button>
+      <button class="tab ${state.tab === "orcamento" ? "on" : ""}" data-tab="orcamento">Orçamento</button>
+      <button class="tab ${state.tab === "despesas" ? "on" : ""}" data-tab="despesas">Despesas</button>
+    </nav>`;
+}
+
+function painelView(m) {
+  return `
+    <div class="scroll">
+      <div class="topbar">
+        <div class="hello">Olá, ${esc(state.nome)}</div>
+        <button class="linkish" id="btnReload">${state.loading ? "Atualizando…" : "Atualizar"}</button>
+      </div>
+      <div class="title">${esc(state.mes)} ${esc(state.ano)}</div>
+      <div class="hero">
+        <div class="lbl">Saldo do mês</div>
+        <div class="val">${brl(m.saldo)}</div>
+        <div class="sub">receitas realizadas − despesas realizadas</div>
+      </div>
+      <div class="grid2">
+        <div class="kpi"><span>RECEITAS</span><b style="color:var(--emerald)">${brl(m.receitas)}</b></div>
+        <div class="kpi"><span>PREVISTO</span><b>${brl(m.previsto)}</b></div>
+        <div class="kpi"><span>REALIZADO</span><b style="color:var(--rose)">${brl(m.realizado)}</b></div>
+        <div class="kpi"><span>A PAGAR</span><b style="color:var(--violet)">${brl(m.pagar)}</b></div>
+      </div>
+      <div class="section">Regra 50-30-20</div>
+      <div class="bar-row"><div class="top"><span>Necessidades</span><span>${pct(m.necP)}</span></div><div class="track"><div class="fill" style="width:${Math.min(m.necP, 100)}%;background:var(--teal)"></div></div></div>
+      <div class="bar-row"><div class="top"><span>Desejos</span><span>${pct(m.desP)}</span></div><div class="track"><div class="fill" style="width:${Math.min(m.desP, 100)}%;background:var(--amber)"></div></div></div>
+      <div class="bar-row"><div class="top"><span>Poupança</span><span>${pct(m.pouP)}</span></div><div class="track"><div class="fill" style="width:${Math.min(m.pouP, 100)}%;background:var(--emerald)"></div></div></div>
+      <div class="section">Leituras</div>
+      <div class="alert"><span class="dot" style="background:${m.realizado <= m.previsto ? "var(--emerald)" : "var(--rose)"}"></span> ${m.realizado <= m.previsto ? "Despesas ainda dentro do previsto" : "Você já gastou mais do que o previsto"}</div>
+      <div class="alert"><span class="dot" style="background:${m.atrasadas ? "var(--rose)" : m.breve ? "var(--amber)" : "var(--emerald)"}"></span> ${m.atrasadas ? `${m.atrasadas} conta(s) atrasada(s)` : m.breve ? `${m.breve} conta(s) vencem em breve` : "Nenhuma conta atrasada"}</div>
+      ${state.error ? `<p class="error">${esc(state.error)}</p>` : ""}
+    </div>`;
+}
+
+function orcamentoView(m) {
+  const rows = state.orcamento
+    .filter((o) => o.categoria)
+    .map((o) => {
+      const uso = o.limite ? o.realizado / o.limite : 0;
+      const color = uso > 1 ? "var(--rose)" : uso >= 0.9 ? "var(--amber)" : "var(--teal)";
+      const sit = o.situacao || (uso > 1 ? "estourou" : uso >= 0.9 ? "atenção" : "no limite");
+      return `<div class="cat">
+        <div style="display:flex;justify-content:space-between;font-size:13px"><b>${esc(o.categoria)}</b><span>${brl(o.realizado)}</span></div>
+        <div class="track" style="margin-top:8px"><div class="fill" style="width:${Math.min(uso * 100, 120)}%;background:${color}"></div></div>
+        <small>Limite ${brl(o.limite)} · ${esc(sit)}</small>
+      </div>`;
+    })
+    .join("");
+  const deg = Math.min(m.usoLimite, 1) * 360;
+  return `
+    <div class="scroll">
+      <div class="hello">Uso do limite</div>
+      <div class="title">Orçamento</div>
+      <div class="ring-wrap">
+        <div class="ring" style="background:conic-gradient(var(--teal) 0 ${deg}deg,#e2e8f0 ${deg}deg 360deg)"><i>${Math.round(m.usoLimite * 100)}%</i></div>
+        <div>
+          <div style="font-size:12px;color:var(--muted)">${esc(state.mes)} ${esc(state.ano)}</div>
+          <div style="font-weight:700;margin-top:4px">${brl(m.realizado)} / ${brl(m.limite)}</div>
+          <div style="font-size:12px;color:var(--muted);margin-top:4px">Restam ${brl(Math.max(m.limite - m.realizado, 0))} no mês</div>
+        </div>
+      </div>
+      <div class="section">Por categoria</div>
+      ${rows || `<div class="empty">Sem categorias neste mês.</div>`}
+    </div>`;
+}
+
+function despesasView() {
+  const list = filteredDespesas()
+    .map(
+      (d) => `
+      <button class="item" data-row="${d.sheetRow}">
+        <span class="check ${d.pago ? "yes" : ""}" data-toggle="${d.sheetRow}">${d.pago ? "✓" : ""}</span>
+        <span class="mid"><b>${esc(d.descricao || "(sem descrição)")}</b><small>${esc(d.categoria)} · ${d.vencimento ? "vence " + isoToBR(d.vencimento) : d.tipo || ""}</small></span>
+        <span class="right"><b>${brl(d.pago ? d.realizado || d.previsto : d.previsto)}</b><span class="pill ${pillClass(d.status)}">${esc(d.status || (d.pago ? "Pago" : "Pendente"))}</span></span>
+      </button>`
+    )
+    .join("");
+  return `
+    <div class="scroll">
+      <div class="hello">Lançamentos do mês</div>
+      <div class="title">Despesas</div>
+      <input class="search" id="q" placeholder="Buscar descrição…  ex.: uber" value="${esc(state.query)}" />
+      <div class="chips">
+        <button class="chip ${state.filtro === "todas" ? "on" : ""}" data-filtro="todas">Todas</button>
+        <button class="chip ${state.filtro === "pagar" ? "on" : ""}" data-filtro="pagar">A pagar</button>
+        <button class="chip ${state.filtro === "atrasadas" ? "on" : ""}" data-filtro="atrasadas">Atrasadas</button>
+      </div>
+      ${list || `<div class="empty">Nenhuma despesa neste mês. Toque no + para lançar.</div>`}
+    </div>
+    <button class="fab" id="fab">+</button>`;
+}
+
+function sheetView() {
+  const f = state.form;
+  const L = state.listas;
+  return `
+    <div class="sheet ${state.sheetOpen ? "open" : ""}" id="sheet">
+      <div class="sheet-head">
+        <h2>${state.editingRow ? "Editar despesa" : "Nova despesa"}</h2>
+        <button class="ghost" id="closeSheet">×</button>
+      </div>
+      <div class="sheet-body">
+        <div class="field"><label>Descrição</label><input id="fDesc" value="${esc(f.descricao)}" placeholder="Ex.: IPTU casa da praia" /></div>
+        <div class="field"><label>Categoria</label><select id="fCat">${options(L.categorias, f.categoria)}</select></div>
+        <div class="row2">
+          <div class="field"><label>Previsto</label><input id="fPrev" inputmode="decimal" value="${esc(f.previsto)}" placeholder="0,00" /></div>
+          <div class="field"><label>Vencimento</label><input id="fVenc" type="date" value="${esc(f.vencimento)}" /></div>
+        </div>
+        <div class="toggle">Já paguei <div class="switch ${f.pago ? "on" : ""}" id="pagoSwitch"><i></i></div></div>
+        <div class="field ${f.pago ? "" : "hidden"}" id="realizadoField">
+          <label>Realizado</label><input id="fReal" inputmode="decimal" value="${esc(f.realizado)}" placeholder="0,00" />
+        </div>
+        <button class="more" id="moreBtn">${state.moreOpen ? "Menos detalhes" : "Mais detalhes"}</button>
+        <div class="${state.moreOpen ? "" : "hidden"}" id="extra">
+          <div class="row2">
+            <div class="field"><label>Tipo</label><select id="fTipo">${options(L.tipos, f.tipo)}</select></div>
+            <div class="field"><label>Prioridade</label><select id="fPrio">${options(L.prioridades, f.prioridade)}</select></div>
+          </div>
+          <div class="row2">
+            <div class="field"><label>Pagamento</label><select id="fPag">${options(L.pagamentos, f.pagamento)}</select></div>
+            <div class="field"><label>Conta</label><select id="fConta">${options(L.contas, f.conta)}</select></div>
+          </div>
+          <div class="row2">
+            <div class="field"><label>Recorrente</label><select id="fRec">${options(["Não", "Sim"], f.recorrente)}</select></div>
+            <div class="field"><label>Parcela</label><input id="fParc" value="${esc(f.parcela)}" placeholder="Ex.: 3/12" /></div>
+          </div>
+          <div class="field"><label>Observações</label><input id="fObs" value="${esc(f.observacoes)}" placeholder="Opcional" /></div>
+        </div>
+      </div>
+      <button class="save" id="saveBtn">${state.loading ? "Salvando…" : "Salvar na planilha"}</button>
+    </div>`;
+}
+
+function appView() {
+  const m = metrics();
+  let body = "";
+  if (state.tab === "painel") body = painelView(m);
+  if (state.tab === "orcamento") body = orcamentoView(m);
+  if (state.tab === "despesas") body = despesasView();
+  return `<div class="app ${state.loading ? "busy" : ""}">${body}${tabs()}${sheetView()}
+    <div class="toast ${state.toast ? "show" : ""}">${esc(state.toast)}</div></div>`;
+}
+
+function render() {
+  const root = document.getElementById("root");
+  const ready = state.clientId && state.spreadsheetId && state.token;
+  const active = document.activeElement;
+  const activeId = active?.id;
+  const sel = active && active.selectionStart;
+  root.innerHTML = ready ? appView() : setupView();
+  bind();
+  if (activeId) {
+    const el = document.getElementById(activeId);
+    if (el) {
+      el.focus();
+      if (typeof sel === "number" && el.setSelectionRange) {
+        try { el.setSelectionRange(sel, sel); } catch (_) {}
+      }
+    }
+  }
+}
+
+function readFormFromDom() {
+  const $ = (id) => document.getElementById(id);
+  if (!$("fDesc")) return;
+  state.form.descricao = $("fDesc").value;
+  state.form.categoria = $("fCat").value;
+  state.form.previsto = $("fPrev").value;
+  state.form.vencimento = $("fVenc").value;
+  state.form.realizado = $("fReal") ? $("fReal").value : state.form.realizado;
+  if ($("fTipo")) {
+    state.form.tipo = $("fTipo").value;
+    state.form.prioridade = $("fPrio").value;
+    state.form.pagamento = $("fPag").value;
+    state.form.conta = $("fConta").value;
+    state.form.recorrente = $("fRec").value;
+    state.form.parcela = $("fParc").value;
+    state.form.observacoes = $("fObs").value;
+  }
+}
+
+function openNew() {
+  state.editingRow = null;
+  state.moreOpen = false;
+  state.form = blankForm();
+  if (state.listas.categorias[0]) state.form.categoria = state.listas.categorias[0];
+  state.sheetOpen = true;
+  render();
+}
+
+function openEdit(row) {
+  const d = state.despesas.find((x) => x.sheetRow === row);
+  if (!d) return;
+  state.editingRow = row;
+  state.moreOpen = false;
+  state.form = {
+    pago: d.pago,
+    descricao: d.descricao,
+    categoria: d.categoria,
+    tipo: d.tipo || "Variável",
+    vencimento: d.vencimento || todayISO(),
+    prioridade: d.prioridade || "Média",
+    previsto: d.previsto ? String(d.previsto) : "",
+    realizado: d.realizado ? String(d.realizado) : "",
+    pagamento: d.pagamento || "Pix",
+    conta: d.conta || "Nubank",
+    recorrente: d.recorrente || "Não",
+    parcela: d.parcela,
+    observacoes: d.observacoes,
+  };
+  state.sheetOpen = true;
+  render();
+}
+
+function firstEmptyRow(idx) {
+  const used = new Set(state.despesas.map((d) => d.sheetRow));
+  const start = (state._despMeta?.headerRow ?? 4) + 2;
+  for (let r = start; r < start + 400; r++) {
+    if (!used.has(r)) return r;
+  }
+  return start + state.despesas.length;
+}
+
+async function saveExpense() {
+  readFormFromDom();
+  const f = state.form;
+  if (!f.descricao.trim()) {
+    showToast("Preencha a descrição.");
+    return;
+  }
+  const idx = state._despMeta?.idx || {};
+  const row = state.editingRow || firstEmptyRow(idx);
+  const competencia = `${state.ano}-${String(state.mesNum).padStart(2, "0")}-01`;
+  const previsto = num(f.previsto);
+  const realizado = f.pago ? num(f.realizado || f.previsto) : num(f.realizado);
+  const writes = {
+    pago: f.pago,
+    competencia: isoToBR(competencia),
+    categoria: f.categoria,
+    descricao: f.descricao.trim(),
+    tipo: f.tipo,
+    vencimento: isoToBR(f.vencimento),
+    prioridade: f.prioridade,
+    previsto,
+    realizado: f.pago ? realizado : realizado || "",
+    pagamento: f.pagamento,
+    conta: f.conta,
+    recorrente: f.recorrente,
+    parcela: f.parcela,
+    observacoes: f.observacoes,
+  };
+  const data = [];
+  for (const [field, value] of Object.entries(writes)) {
+    if (idx[field] == null) continue;
+    data.push({
+      range: `Despesas!${colLetter(idx[field])}${row}`,
+      values: [[value]],
+    });
+  }
+  state.loading = true;
+  render();
+  try {
+    await api("/values:batchUpdate?valueInputOption=USER_ENTERED", {
+      method: "POST",
+      body: JSON.stringify({ valueInputOption: "USER_ENTERED", data }),
+    });
+    state.sheetOpen = false;
+    showToast("Salvo. Status e % calculam na planilha.");
+    await refresh();
+  } catch (err) {
+    state.loading = false;
+    state.error = err.message;
+    showToast(err.message);
+    render();
+  }
+}
+
+async function togglePago(row, ev) {
+  ev.stopPropagation();
+  const d = state.despesas.find((x) => x.sheetRow === row);
+  if (!d || d.idx?.pago == null) return;
+  const next = !d.pago;
+  try {
+    await api("/values:batchUpdate?valueInputOption=USER_ENTERED", {
+      method: "POST",
+      body: JSON.stringify({
+        valueInputOption: "USER_ENTERED",
+        data: [
+          { range: `Despesas!${colLetter(d.idx.pago)}${row}`, values: [[next]] },
+          ...(next && !d.realizado && d.previsto
+            ? [{ range: `Despesas!${colLetter(d.idx.realizado)}${row}`, values: [[d.previsto]] }]
+            : []),
+        ],
+      }),
+    });
+    await refresh();
+  } catch (err) {
+    showToast(err.message);
+  }
+}
+
+function showToast(msg) {
+  state.toast = msg;
+  render();
+  setTimeout(() => {
+    state.toast = "";
+    render();
+  }, 2400);
+}
+
+function bind() {
+  const on = (id, ev, fn) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener(ev, fn);
+  };
+
+  on("btnConnect", "click", async () => {
+    const url = document.getElementById("sheetUrl").value;
+    const clientId = document.getElementById("clientId").value.trim();
+    const spreadsheetId = extractSpreadsheetId(url);
+    const err = document.getElementById("setupErr");
+    if (!spreadsheetId) {
+      err.textContent = "Cole a URL completa da planilha.";
+      return;
+    }
+    if (!clientId.includes("apps.googleusercontent.com")) {
+      err.textContent = "Cole o ID do cliente OAuth do tipo Aplicativo da Web.";
+      return;
+    }
+    saveConfig({ clientId, spreadsheetId, spreadsheetUrl: url });
+    state.clientId = clientId;
+    state.spreadsheetId = spreadsheetId;
+    try {
+      await waitGoogle();
+      tokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: clientId,
+        scope: SCOPE,
+        callback: () => {},
+      });
+      await login(false);
+      await refresh();
+    } catch (e) {
+      state.error = e.message;
+      render();
+    }
+  });
+
+  document.querySelectorAll("[data-tab]").forEach((b) =>
+    b.addEventListener("click", () => {
+      state.tab = b.dataset.tab;
+      state.sheetOpen = false;
+      render();
+    })
+  );
+  on("btnReload", "click", () => refresh());
+  on("fab", "click", openNew);
+  on("closeSheet", "click", () => {
+    state.sheetOpen = false;
+    render();
+  });
+  on("moreBtn", "click", () => {
+    readFormFromDom();
+    state.moreOpen = !state.moreOpen;
+    render();
+  });
+  on("pagoSwitch", "click", () => {
+    readFormFromDom();
+    state.form.pago = !state.form.pago;
+    if (state.form.pago && !state.form.realizado) state.form.realizado = state.form.previsto;
+    render();
+  });
+  on("saveBtn", "click", saveExpense);
+  on("q", "input", (e) => {
+    state.query = e.target.value;
+    render();
+  });
+  document.querySelectorAll("[data-filtro]").forEach((b) =>
+    b.addEventListener("click", () => {
+      state.filtro = b.dataset.filtro;
+      render();
+    })
+  );
+  document.querySelectorAll(".item[data-row]").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      if (e.target.closest("[data-toggle]")) return;
+      openEdit(Number(b.dataset.row));
+    })
+  );
+  document.querySelectorAll("[data-toggle]").forEach((b) =>
+    b.addEventListener("click", (e) => togglePago(Number(b.dataset.toggle), e))
+  );
+}
+
+async function boot() {
+  const cfg = loadConfig();
+  state.clientId = cfg.clientId || "";
+  state.spreadsheetId = cfg.spreadsheetId || "";
+  render();
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("./sw.js").catch(() => {});
+  }
+  if (state.clientId && state.spreadsheetId) {
+    try {
+      await waitGoogle();
+      tokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: state.clientId,
+        scope: SCOPE,
+        callback: () => {},
+      });
+      await login(false);
+      await refresh();
+    } catch (e) {
+      state.error = e.message;
+      state.token = null;
+      render();
+    }
+  }
+}
+
+boot();
