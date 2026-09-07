@@ -155,7 +155,7 @@ function num(v) {
 }
 
 function truthy(v) {
-  return v === true || v === "TRUE" || v === "VERDADEIRO" || v === "Sim" || v === "PAGO";
+  return v === true || v === "TRUE" || v === "VERDADEIRO" || v === "Sim" || v === "PAGO" || v === "RECEBIDO";
 }
 
 function colLetter(i) {
@@ -171,9 +171,10 @@ function colLetter(i) {
 
 function mapHeaders(row) {
   const aliases = {
-    pago: ["pago?", "pago"],
+    pago: ["pago?", "pago", "recebido?", "recebido"],
     competencia: ["competência", "competencia"],
-    categoria: ["categoria"],
+    categoria: ["categoria", "fonte"],
+    fonte: ["fonte"],
     descricao: ["descrição", "descricao"],
     tipo: ["tipo"],
     vencimento: ["vencimento"],
@@ -332,10 +333,16 @@ function parseTables(batch) {
       if (a.includes("PESQUISA")) continue;
       const joined = values[i].map((x) => String(x || "")).join(" ").toLowerCase();
       const hasPago = a.toLowerCase().includes("pago") || joined.includes("pago");
+      const hasRecebido = a.toLowerCase().includes("recebido") || joined.includes("recebido");
       const hasDesc = joined.includes("descrição") || joined.includes("descricao");
       const hasComp = joined.includes("competência") || joined.includes("competencia");
       const hasPrev = joined.includes("previsto");
-      if (hasPago && (hasDesc || hasComp || hasPrev)) {
+      const hasFonte = joined.includes("fonte");
+      if (kind === "receita" && (hasRecebido || hasComp) && (hasDesc || hasPrev || hasFonte)) {
+        headerRow = i;
+        break;
+      }
+      if (kind !== "receita" && hasPago && (hasDesc || hasComp || hasPrev)) {
         headerRow = i;
         break;
       }
@@ -348,8 +355,8 @@ function parseTables(batch) {
       const joined = r.map((x) => String(x || "")).join(" ");
       if (marker.includes("PESQUISA")) continue;
       const descricao = String(r[idx.descricao] ?? "");
-      const categoria = String(r[idx.categoria] ?? (kind === "orcamento" ? r[1] : "") ?? "");
-      const fonte = kind === "receita" ? String(r[idx.categoria] ?? r[2] ?? "") : "";
+      const fonte = kind === "receita" ? String(r[idx.fonte] ?? r[idx.categoria] ?? r[2] ?? "") : "";
+      const categoria = kind === "receita" ? fonte : String(r[idx.categoria] ?? (kind === "orcamento" ? r[1] : "") ?? "");
       if (kind !== "orcamento" && !descricao && !categoria && !fonte) continue;
       if (kind === "orcamento" && !categoria) continue;
       if (kind === "despesa" && isSummaryRow(descricao, joined)) continue;
@@ -479,6 +486,18 @@ function monthReceitas() {
   return state.receitas.filter((d) => inWorkMonth(d));
 }
 
+function categoriaClasse(cat) {
+  const o = state.orcamento.find((x) => x.categoria === cat);
+  return String(o?.classe || "");
+}
+
+function classeGasto(partial) {
+  const key = partial.toLowerCase();
+  return monthDespesas()
+    .filter((d) => categoriaClasse(d.categoria).toLowerCase().includes(key))
+    .reduce((a, x) => a + (x.pago ? (x.realizado || x.previsto) : x.realizado), 0);
+}
+
 function metrics() {
   const ds = monthDespesas();
   const rs = monthReceitas();
@@ -488,13 +507,9 @@ function metrics() {
   const pagar = ds.filter((x) => !x.pago).reduce((a, x) => a + x.previsto, 0);
   const atrasadas = ds.filter((x) => String(x.status).toLowerCase().includes("atras")).length;
   const breve = ds.filter((x) => String(x.status).toLowerCase().includes("breve")).length;
-  const classe = (name) =>
-    state.orcamento
-      .filter((o) => String(o.classe).toLowerCase().includes(name))
-      .reduce((a, x) => a + x.realizado, 0);
-  const nec = classe("necessidade");
-  const des = classe("desejo");
-  const pou = classe("poupan");
+  const nec = classeGasto("necessidade");
+  const des = classeGasto("desejo");
+  const pou = classeGasto("poupan");
   const limite = state.orcamento.reduce((a, x) => a + (x.limite || 0), 0);
   return {
     receitas,
