@@ -1,5 +1,6 @@
 const KEY = "minhas-financas-config";
-const SCOPE = "https://www.googleapis.com/auth/spreadsheets";
+const SCOPE =
+  "https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/userinfo.profile";
 const DEFAULTS = {
   spreadsheetUrl: "https://docs.google.com/spreadsheets/d/1jSJaWTpsmrjskUPhQS1fvQxVbs7dpI05NMzT7-IkS-o/edit",
   clientId: "1012119713797-8tig992brdgokg5uovs3oendceb9e5oj.apps.googleusercontent.com",
@@ -33,6 +34,7 @@ const state = {
   editingRow: null,
   toast: "",
   hint: "",
+  booting: true,
   form: blankForm(),
 };
 
@@ -261,6 +263,54 @@ function login(silent) {
   });
 }
 
+async function initTokenClient() {
+  await waitGoogle();
+  tokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: state.clientId,
+    scope: SCOPE,
+    callback: () => {},
+  });
+}
+
+async function ensureSession() {
+  await initTokenClient();
+  try {
+    await login(true);
+  } catch {
+    await login(false);
+  }
+  await fetchGoogleProfile();
+}
+
+async function fetchGoogleProfile() {
+  if (!state.token) return;
+  try {
+    const res = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
+      headers: { Authorization: `Bearer ${state.token}` },
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    const name = data.given_name || String(data.name || "").split(" ")[0] || "";
+    if (name) {
+      state.nome = name;
+      saveConfig({ googleName: name });
+    }
+  } catch (_) {}
+}
+
+function applyStoredConfig() {
+  const cfg = loadConfig();
+  state.clientId = normalizeClientId(cfg.clientId || DEFAULTS.clientId);
+  state.spreadsheetId = cfg.spreadsheetId || extractSpreadsheetId(DEFAULTS.spreadsheetUrl);
+  const spreadsheetUrl = cfg.spreadsheetUrl || DEFAULTS.spreadsheetUrl;
+  saveConfig({
+    clientId: state.clientId,
+    spreadsheetId: state.spreadsheetId,
+    spreadsheetUrl,
+  });
+  if (cfg.googleName) state.nome = cfg.googleName;
+}
+
 function pillClass(status) {
   const s = String(status || "").toLowerCase();
   if (s.includes("pago") || s.includes("recebido") || s.includes("orçamento") || s === "economia") return "p-ok";
@@ -307,7 +357,11 @@ function parseTables(batch) {
   });
 
   const cfg = byRange.Config || [];
-  state.nome = String(cfg[0]?.[0] || "Olá");
+  const cfgName = String(cfg[0]?.[0] || "").trim();
+  const googleName = loadConfig().googleName || state.nome || "";
+  state.nome =
+    googleName ||
+    (cfgName && cfgName.toLowerCase() !== "meu nome" ? cfgName : "Olá");
   state.ano = Number(cfg[1]?.[0] || new Date().getFullYear());
   state.mes = String(cfg[2]?.[0] || MONTHS[new Date().getMonth()]);
   const idxMes = MONTHS.findIndex((m) => m.toLowerCase() === state.mes.toLowerCase());
@@ -556,34 +610,32 @@ function options(list, selected) {
   return items.map((v) => `<option ${v === selected ? "selected" : ""}>${esc(v)}</option>`).join("");
 }
 
-function setupView() {
-  const cfg = loadConfig();
-  const sheetUrl = cfg.spreadsheetUrl || DEFAULTS.spreadsheetUrl;
-  const clientId = normalizeClientId(cfg.clientId || DEFAULTS.clientId);
-  const origin = typeof location !== "undefined" ? location.origin : "";
+function loadingView() {
   return `
     <div class="app">
       <div class="setup">
         <div class="hello">Minhas Finanças</div>
-        <h1>Conectar a planilha</h1>
-        <p>Uma vez só. Depois, você e sua esposa entram com o Google e veem os mesmos dados.</p>
-        <div class="field">
-          <label>① URL da planilha Google</label>
-          <input id="sheetUrl" placeholder="https://docs.google.com/spreadsheets/d/..." value="${esc(sheetUrl)}" />
-        </div>
-        <div class="field">
-          <label>② ID do cliente OAuth (sem https://)</label>
-          <input id="clientId" placeholder="123456-abc.apps.googleusercontent.com" value="${esc(clientId)}" autocapitalize="none" autocorrect="off" spellcheck="false" />
-        </div>
-        <p class="muted" style="margin-top:14px;font-size:12px;line-height:1.5">
-          No Google Cloud → Clientes → Origens JavaScript autorizadas, inclua:<br/>
-          <code>${esc(origin || "https://financas.sistemaesatto.com.br")}</code><br/>
-          <code>https://antoniohortajunior.github.io</code>
-        </p>
+        <h1>Carregando…</h1>
+        <p class="muted">Conectando à planilha e atualizando os dados.</p>
+      </div>
+    </div>`;
+}
+
+function loginView() {
+  return `
+    <div class="app">
+      <div class="setup">
+        <div class="hello">Minhas Finanças</div>
+        <h1>Entrar</h1>
+        <p>Toque abaixo para abrir com sua conta Google. Na primeira vez, o Google pede permissão; depois entra direto.</p>
         <p class="error" id="setupErr">${esc(state.error)}</p>
         <button class="save" id="btnConnect" style="margin:18px 0 0;width:100%">Entrar com Google</button>
       </div>
     </div>`;
+}
+
+function setupView() {
+  return loginView();
 }
 
 function tabs() {
@@ -741,7 +793,9 @@ function render() {
   const active = document.activeElement;
   const activeId = active?.id;
   const sel = active && active.selectionStart;
-  root.innerHTML = ready ? appView() : setupView();
+  if (state.booting) root.innerHTML = loadingView();
+  else if (ready) root.innerHTML = appView();
+  else root.innerHTML = loginView();
   bind();
   if (activeId) {
     const el = document.getElementById(activeId);
@@ -909,32 +963,21 @@ function bind() {
   };
 
   on("btnConnect", "click", async () => {
-    const url = document.getElementById("sheetUrl").value;
-    const clientId = normalizeClientId(document.getElementById("clientId").value);
-    const spreadsheetId = extractSpreadsheetId(url);
     const err = document.getElementById("setupErr");
-    if (!spreadsheetId) {
-      err.textContent = "Cole a URL completa da planilha.";
-      return;
-    }
-    if (!/^[0-9]+-[a-z0-9]+\.apps\.googleusercontent\.com$/i.test(clientId)) {
-      err.textContent = "Client ID inválido. Copie de Clientes no Google Cloud (termina em .apps.googleusercontent.com, sem https).";
-      return;
-    }
-    saveConfig({ clientId, spreadsheetId, spreadsheetUrl: url });
-    state.clientId = clientId;
-    state.spreadsheetId = spreadsheetId;
+    applyStoredConfig();
+    if (err) err.textContent = "";
+    state.error = "";
+    state.loading = true;
+    render();
     try {
-      await waitGoogle();
-      tokenClient = google.accounts.oauth2.initTokenClient({
-        client_id: clientId,
-        scope: SCOPE,
-        callback: () => {},
-      });
-      await login(false);
+      await ensureSession();
       await refresh();
     } catch (e) {
       state.error = e.message;
+      state.token = null;
+      render();
+    } finally {
+      state.loading = false;
       render();
     }
   });
@@ -986,31 +1029,20 @@ function bind() {
 }
 
 async function boot() {
-  const cfg = loadConfig();
-  state.clientId = normalizeClientId(cfg.clientId || "");
-  state.spreadsheetId = cfg.spreadsheetId || "";
-  if (cfg.clientId && state.clientId !== cfg.clientId) {
-    saveConfig({ clientId: state.clientId });
-  }
+  applyStoredConfig();
   render();
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("./sw.js").catch(() => {});
   }
-  if (state.clientId && state.spreadsheetId) {
-    try {
-      await waitGoogle();
-      tokenClient = google.accounts.oauth2.initTokenClient({
-        client_id: state.clientId,
-        scope: SCOPE,
-        callback: () => {},
-      });
-      await login(false);
-      await refresh();
-    } catch (e) {
-      state.error = e.message;
-      state.token = null;
-      render();
-    }
+  try {
+    await ensureSession();
+    await refresh();
+  } catch (e) {
+    state.error = e.message;
+    state.token = null;
+  } finally {
+    state.booting = false;
+    render();
   }
 }
 
