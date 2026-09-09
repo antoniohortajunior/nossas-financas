@@ -1,30 +1,35 @@
-const CACHE = "minhas-financas-v10";
-const CORE = ["/index.html", "/styles.css", "/app.js", "/manifest.webmanifest", "/icons/icon192.png", "/icons/icon512.png"];
+const CACHE = "minhas-financas-v11";
 
-self.addEventListener("install", (event) => {
-  event.waitUntil(caches.open(CACHE).then((c) => c.addAll(CORE)));
+self.addEventListener("install", (e) => {
   self.skipWaiting();
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(["./manifest.webmanifest"])));
 });
 
-self.addEventListener("activate", (event) => {
-  event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))
-    )
+self.addEventListener("activate", (e) => {
+  e.waitUntil(
+    caches
+      .keys()
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      .then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
-self.addEventListener("fetch", (event) => {
-  const url = new URL(event.request.url);
-  if (url.origin !== location.origin) return;
-  event.respondWith(
-    fetch(event.request)
-      .then((res) => {
-        const copy = res.clone();
-        caches.open(CACHE).then((c) => c.put(event.request, copy));
-        return res;
-      })
-      .catch(() => caches.match(event.request).then((r) => r || caches.match("/index.html")))
-  );
+async function networkFirst(request) {
+  try {
+    const res = await fetch(request, { cache: "no-store" });
+    if (res.ok) {
+      const cache = await caches.open(CACHE);
+      cache.put(request, res.clone());
+    }
+    return res;
+  } catch {
+    const hit = await caches.match(request);
+    if (hit) return hit;
+    throw new Error("offline");
+  }
+}
+
+self.addEventListener("fetch", (e) => {
+  if (e.request.method !== "GET") return;
+  e.respondWith(networkFirst(e.request));
 });

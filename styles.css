@@ -267,8 +267,61 @@ body {
 .muted { color: var(--muted); font-size: 13px; }
 .busy { opacity: 0.6; pointer-events: none; }
 .error { color: var(--rose); font-size: 13px; margin-top: 10px; }
+.install-hint {
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  background: #ecfeff;
+  border: 1px solid #99f6e4;
+  border-radius: 14px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #115e59;
+}
+.install-hint p { margin: 0; }
+.install-hint-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.install-hint-full,
+.install-hint-close {
+  border: 0;
+  border-radius: 10px;
+  padding: 6px 10px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.install-hint-full {
+  background: #115e59;
+  color: #fff;
+}
+.install-hint-close {
+  background: #e8eef3;
+  color: var(--ink);
+}
 .topbar {
-  display: flex; justify-content: space-between; align-items: center;
+  display: flex; justify-content: space-between; align-items: center; gap: 10px;
+}
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.conn-link {
+  border: 0;
+  background: #e8eef3;
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
+  font-size: 14px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  font-family: inherit;
 }
 .linkish {
   border: 0; background: transparent; color: var(--teal-2);

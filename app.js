@@ -1,3 +1,5 @@
+const APP_VERSION = "11";
+const INSTALL_HINT_KEY = "financas-install-hint-v11";
 const KEY = "minhas-financas-config";
 const SCOPE =
   "https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/userinfo.profile";
@@ -597,6 +599,102 @@ function filteredDespesas() {
   });
 }
 
+function isAndroid() {
+  return /Android/i.test(navigator.userAgent);
+}
+
+function isStandalone() {
+  return (
+    window.matchMedia("(display-mode: standalone)").matches ||
+    window.matchMedia("(display-mode: fullscreen)").matches ||
+    window.navigator.standalone === true
+  );
+}
+
+function isMobile() {
+  return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+}
+
+function isIOS() {
+  return /iPhone|iPad|iPod/i.test(navigator.userAgent);
+}
+
+function isFullscreenActive() {
+  return !!(
+    document.fullscreenElement ||
+    document.webkitFullscreenElement ||
+    document.msFullscreenElement
+  );
+}
+
+function isNonStandardPort() {
+  const port = window.location.port;
+  return port !== "" && port !== "443" && port !== "80";
+}
+
+function shouldShowFullscreenControl() {
+  if (!isMobile() || isFullscreenActive()) return false;
+  if (isIOS()) return !window.navigator.standalone;
+  if (isAndroid()) {
+    if (isNonStandardPort()) return true;
+    if (!isStandalone()) return true;
+    return window.location.protocol === "http:";
+  }
+  return !isStandalone();
+}
+
+function enterFullscreen() {
+  const el = document.documentElement;
+  const fn =
+    el.requestFullscreen ||
+    el.webkitRequestFullscreen ||
+    el.webkitRequestFullScreen ||
+    el.msRequestFullscreen;
+  if (!fn) return Promise.reject(new Error("unsupported"));
+  try {
+    return Promise.resolve(fn.call(el, { navigationUI: "hide" }));
+  } catch {
+    return Promise.resolve(fn.call(el));
+  }
+}
+
+function renderInstallHint() {
+  if (localStorage.getItem(INSTALL_HINT_KEY) === "1") return "";
+  if (!isMobile()) return "";
+  if (isStandalone() && !isNonStandardPort() && window.location.protocol === "https:") return "";
+
+  let msg =
+    "Menu ⋮ → <strong>Instalar app</strong> (ou Adicionar à tela inicial) e abra pelo ícone <strong>Finanças</strong>.";
+  if (isIOS()) {
+    msg =
+      "No iPhone, abra no <strong>Safari</strong> → Compartilhar → <strong>Adicionar à Tela de Início</strong> (não use o Chrome).";
+  } else if (isNonStandardPort()) {
+    msg =
+      "Pela porta não padrão, o Chrome pode manter a barra. Toque em <strong>Tela cheia</strong> abaixo ou no botão <strong>⛶</strong> no topo.";
+  } else if (window.location.protocol === "https:") {
+    msg =
+      "Instale pelo menu ⋮ → <strong>Instalar app</strong>. Se a barra do Chrome aparecer, use <strong>Tela cheia</strong> ou <strong>⛶</strong> no topo.";
+  } else if (window.location.protocol === "http:") {
+    msg = isStandalone()
+      ? "Abra pelo ícone <strong>Finanças</strong> na tela inicial. Para sumir a barra de vez, use <strong>HTTPS</strong>."
+      : "Adicione à tela inicial (Menu ⋮ → Instalar app). Se a barra aparecer, use <strong>Tela cheia</strong> ou <strong>⛶</strong> no topo.";
+  }
+
+  return `
+    <div class="install-hint" id="install-hint">
+      <p>${msg}</p>
+      <div class="install-hint-actions">
+        <button type="button" class="install-hint-full" id="btn-fullscreen">Tela cheia</button>
+        <button type="button" class="install-hint-close" id="btn-dismiss-install">Entendi</button>
+      </div>
+    </div>`;
+}
+
+function renderFullscreenBarBtn() {
+  if (!shouldShowFullscreenControl()) return "";
+  return `<button type="button" class="conn-link" id="btn-fullscreen-bar" title="Tela cheia">⛶</button>`;
+}
+
 function esc(s) {
   return String(s ?? "")
     .replace(/&/g, "&amp;")
@@ -650,9 +748,13 @@ function tabs() {
 function painelView(m) {
   return `
     <div class="scroll">
+      ${renderInstallHint()}
       <div class="topbar">
         <div class="hello">Olá, ${esc(state.nome)}</div>
-        <button class="linkish" id="btnReload">${state.loading ? "Atualizando…" : "Atualizar"}</button>
+        <div class="topbar-actions">
+          ${renderFullscreenBarBtn()}
+          <button class="linkish" id="btnReload">${state.loading ? "Atualizando…" : "Atualizar"}</button>
+        </div>
       </div>
       <div class="title">${esc(state.mes)} ${esc(state.ano)}</div>
       <div class="hero">
@@ -962,6 +1064,18 @@ function bind() {
     if (el) el.addEventListener(ev, fn);
   };
 
+  const goFullscreen = () => {
+    enterFullscreen()
+      .then(() => showToast("Tela cheia ativada."))
+      .catch(() => showToast("Tela cheia indisponível neste navegador."));
+  };
+  on("btn-fullscreen", "click", goFullscreen);
+  on("btn-fullscreen-bar", "click", goFullscreen);
+  on("btn-dismiss-install", "click", () => {
+    localStorage.setItem(INSTALL_HINT_KEY, "1");
+    document.getElementById("install-hint")?.remove();
+  });
+
   on("btnConnect", "click", async () => {
     const err = document.getElementById("setupErr");
     applyStoredConfig();
@@ -1032,7 +1146,17 @@ async function boot() {
   applyStoredConfig();
   render();
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => {});
+    navigator.serviceWorker
+      .getRegistrations()
+      .then((regs) => {
+        regs.forEach((reg) => reg.unregister().catch(() => {}));
+      })
+      .finally(() => {
+        navigator.serviceWorker
+          .register(`./sw.js?v=${APP_VERSION}`)
+          .then((reg) => reg.update())
+          .catch(() => {});
+      });
   }
   try {
     await ensureSession();
