@@ -1,4 +1,4 @@
-const APP_VERSION = "11";
+const APP_VERSION = "12";
 const INSTALL_HINT_KEY = "financas-install-hint-v11";
 const KEY = "minhas-financas-config";
 const SCOPE =
@@ -37,8 +37,11 @@ const state = {
   toast: "",
   hint: "",
   booting: true,
+  deleteConfirm: null,
   form: blankForm(),
 };
+
+let longPressTriggered = false;
 
 function blankForm() {
   return {
@@ -879,13 +882,29 @@ function sheetView() {
     </div>`;
 }
 
+function confirmDeleteView() {
+  if (!state.deleteConfirm) return "";
+  const d = state.deleteConfirm;
+  return `
+    <div class="confirm-overlay" id="confirmDelete">
+      <div class="confirm-box">
+        <h3>Excluir lançamento?</h3>
+        <p>Deseja excluir <strong>${esc(d.descricao)}</strong>? Esta ação não pode ser desfeita.</p>
+        <div class="confirm-actions">
+          <button type="button" class="confirm-no" id="deleteNo">Não</button>
+          <button type="button" class="confirm-yes" id="deleteYes">Sim, excluir</button>
+        </div>
+      </div>
+    </div>`;
+}
+
 function appView() {
   const m = metrics();
   let body = "";
   if (state.tab === "painel") body = painelView(m);
   if (state.tab === "orcamento") body = orcamentoView(m);
   if (state.tab === "despesas") body = despesasView();
-  return `<div class="app ${state.loading ? "busy" : ""}">${body}${tabs()}${sheetView()}
+  return `<div class="app ${state.loading ? "busy" : ""}">${body}${tabs()}${sheetView()}${confirmDeleteView()}
     <div class="toast ${state.toast ? "show" : ""}">${esc(state.toast)}</div></div>`;
 }
 
@@ -1049,6 +1068,82 @@ async function togglePago(row, ev) {
   }
 }
 
+async function getDespesasSheetId() {
+  if (state._despSheetId != null) return state._despSheetId;
+  const data = await api("?fields=sheets(properties(sheetId,title))");
+  const sheet = (data.sheets || []).find((s) => s.properties?.title === "Despesas");
+  if (!sheet) throw new Error("Aba Despesas não encontrada na planilha.");
+  state._despSheetId = sheet.properties.sheetId;
+  return state._despSheetId;
+}
+
+function openDeleteConfirm(row) {
+  const d = state.despesas.find((x) => x.sheetRow === row);
+  if (!d) return;
+  state.deleteConfirm = { row, descricao: d.descricao || "(sem descrição)" };
+  render();
+}
+
+function closeDeleteConfirm() {
+  state.deleteConfirm = null;
+  render();
+}
+
+async function deleteExpense(row) {
+  const sheetId = await getDespesasSheetId();
+  state.loading = true;
+  state.deleteConfirm = null;
+  render();
+  try {
+    await api(":batchUpdate", {
+      method: "POST",
+      body: JSON.stringify({
+        requests: [
+          {
+            deleteDimension: {
+              range: {
+                sheetId,
+                dimension: "ROWS",
+                startIndex: row - 1,
+                endIndex: row,
+              },
+            },
+          },
+        ],
+      }),
+    });
+    showToast("Lançamento excluído.");
+    await refresh();
+  } catch (err) {
+    state.loading = false;
+    showToast(err.message);
+    render();
+  }
+}
+
+function bindLongPress(el, row) {
+  let timer = null;
+  const start = () => {
+    longPressTriggered = false;
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      longPressTriggered = true;
+      openDeleteConfirm(row);
+    }, 2000);
+  };
+  const cancel = () => {
+    clearTimeout(timer);
+    timer = null;
+  };
+  el.addEventListener("touchstart", start, { passive: true });
+  el.addEventListener("mousedown", start);
+  el.addEventListener("touchend", cancel);
+  el.addEventListener("touchcancel", cancel);
+  el.addEventListener("touchmove", cancel);
+  el.addEventListener("mouseup", cancel);
+  el.addEventListener("mouseleave", cancel);
+}
+
 function showToast(msg) {
   state.toast = msg;
   render();
@@ -1100,6 +1195,7 @@ function bind() {
     b.addEventListener("click", () => {
       state.tab = b.dataset.tab;
       state.sheetOpen = false;
+      state.deleteConfirm = null;
       render();
     })
   );
@@ -1131,15 +1227,25 @@ function bind() {
       render();
     })
   );
-  document.querySelectorAll(".item[data-row]").forEach((b) =>
+  document.querySelectorAll(".item[data-row]").forEach((b) => {
+    const row = Number(b.dataset.row);
+    bindLongPress(b, row);
     b.addEventListener("click", (e) => {
       if (e.target.closest("[data-toggle]")) return;
-      openEdit(Number(b.dataset.row));
-    })
-  );
+      if (longPressTriggered) {
+        longPressTriggered = false;
+        return;
+      }
+      openEdit(row);
+    });
+  });
   document.querySelectorAll("[data-toggle]").forEach((b) =>
     b.addEventListener("click", (e) => togglePago(Number(b.dataset.toggle), e))
   );
+  on("deleteNo", "click", closeDeleteConfirm);
+  on("deleteYes", "click", () => {
+    if (state.deleteConfirm?.row) deleteExpense(state.deleteConfirm.row);
+  });
 }
 
 async function boot() {

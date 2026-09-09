@@ -247,6 +247,60 @@ body {
   border: 0; background: var(--teal); color: #fff; border-radius: 16px;
   height: 50px; font-family: inherit; font-size: 15px; font-weight: 700;
 }
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(430px, 100%);
+  background: rgba(15, 23, 42, 0.45);
+  z-index: 14;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+.confirm-box {
+  width: 100%;
+  background: #fff;
+  border-radius: 20px;
+  padding: 20px;
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.18);
+}
+.confirm-box h3 {
+  margin: 0;
+  font-size: 18px;
+  letter-spacing: -0.03em;
+}
+.confirm-box p {
+  margin: 10px 0 0;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.confirm-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 18px;
+}
+.confirm-no,
+.confirm-yes {
+  flex: 1;
+  border: 0;
+  border-radius: 14px;
+  height: 44px;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.confirm-no {
+  background: #e8eef3;
+  color: var(--ink);
+}
+.confirm-yes {
+  background: var(--rose);
+  color: #fff;
+}
 .toast {
   position: fixed;
   left: 50%;
