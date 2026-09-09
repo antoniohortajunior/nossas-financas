@@ -1,12 +1,17 @@
 {
+  "id": "/",
   "name": "Minhas Finanças",
   "short_name": "Finanças",
   "description": "Painel, orçamento e despesas ligados à sua planilha Google.",
-  "start_url": "./index.html",
+  "start_url": "/index.html",
+  "scope": "/",
   "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "portrait",
   "background_color": "#0f766e",
   "theme_color": "#0f766e",
   "lang": "pt-BR",
+  "prefer_related_applications": false,
   "icons": [
     {
       "src": "icons/icon192.png",
@@ -21,10 +26,10 @@
       "purpose": "any"
     },
     {
-      "src": "icons/icon.png",
-      "sizes": "1024x1024",
+      "src": "icons/icon512.png",
+      "sizes": "512x512",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "maskable"
     }
   ]
 }

@@ -1,5 +1,5 @@
-const CACHE = "minhas-financas-v8";
-const CORE = ["./index.html", "./styles.css", "./app.js", "./manifest.webmanifest", "./icons/icon.png", "./icons/icon192.png", "./icons/icon512.png"];
+const CACHE = "minhas-financas-v9";
+const CORE = ["/index.html", "/styles.css", "/app.js", "/manifest.webmanifest", "/icons/icon192.png", "/icons/icon512.png"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((c) => c.addAll(CORE)));
@@ -25,6 +25,6 @@ self.addEventListener("fetch", (event) => {
         caches.open(CACHE).then((c) => c.put(event.request, copy));
         return res;
       })
-      .catch(() => caches.match(event.request).then((r) => r || caches.match("./index.html")))
+      .catch(() => caches.match(event.request).then((r) => r || caches.match("/index.html")))
   );
 });
