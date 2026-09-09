@@ -1,4 +1,4 @@
-const CACHE = "minhas-financas-v9";
+const CACHE = "minhas-financas-v10";
 const CORE = ["/index.html", "/styles.css", "/app.js", "/manifest.webmanifest", "/icons/icon192.png", "/icons/icon512.png"];
 
 self.addEventListener("install", (event) => {
