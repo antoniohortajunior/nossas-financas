@@ -1,4 +1,4 @@
-const APP_VERSION = "12";
+const APP_VERSION = "13";
 const INSTALL_HINT_KEY = "financas-install-hint-v11";
 const KEY = "minhas-financas-config";
 const SCOPE =
@@ -819,11 +819,11 @@ function despesasView() {
   const list = filteredDespesas()
     .map(
       (d) => `
-      <button class="item" data-row="${d.sheetRow}">
+      <div class="item" role="button" tabindex="0" data-row="${d.sheetRow}">
         <span class="check ${d.pago ? "yes" : ""}" data-toggle="${d.sheetRow}">${d.pago ? "✓" : ""}</span>
         <span class="mid"><b>${esc(d.descricao || "(sem descrição)")}</b><small>${esc(d.categoria)} · ${d.vencimento ? "vence " + isoToBR(d.vencimento) : d.tipo || ""}</small></span>
         <span class="right"><b>${brl(d.pago ? d.realizado || d.previsto : d.previsto)}</b><span class="pill ${pillClass(d.status)}">${esc(d.status || (d.pago ? "Pago" : "Pendente"))}</span></span>
-      </button>`
+      </div>`
     )
     .join("");
   return `
@@ -1121,27 +1121,74 @@ async function deleteExpense(row) {
   }
 }
 
+const LONG_PRESS_MS = 2000;
+const LONG_PRESS_MOVE_PX = 14;
+
 function bindLongPress(el, row) {
   let timer = null;
-  const start = () => {
-    longPressTriggered = false;
-    clearTimeout(timer);
-    timer = setTimeout(() => {
-      longPressTriggered = true;
-      openDeleteConfirm(row);
-    }, 2000);
-  };
-  const cancel = () => {
+  let startX = 0;
+  let startY = 0;
+  let pointerId = null;
+
+  const clearHold = () => {
     clearTimeout(timer);
     timer = null;
+    pointerId = null;
+    el.classList.remove("hold");
   };
-  el.addEventListener("touchstart", start, { passive: true });
-  el.addEventListener("mousedown", start);
-  el.addEventListener("touchend", cancel);
-  el.addEventListener("touchcancel", cancel);
-  el.addEventListener("touchmove", cancel);
-  el.addEventListener("mouseup", cancel);
-  el.addEventListener("mouseleave", cancel);
+
+  el.addEventListener("pointerdown", (e) => {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    if (pointerId != null) return;
+    pointerId = e.pointerId;
+    startX = e.clientX;
+    startY = e.clientY;
+    longPressTriggered = false;
+    el.classList.add("hold");
+    try {
+      el.setPointerCapture(e.pointerId);
+    } catch (_) {}
+    timer = setTimeout(() => {
+      timer = null;
+      longPressTriggered = true;
+      el.classList.remove("hold");
+      if (navigator.vibrate) navigator.vibrate(50);
+      openDeleteConfirm(row);
+    }, LONG_PRESS_MS);
+  });
+
+  el.addEventListener("pointermove", (e) => {
+    if (e.pointerId !== pointerId || !timer) return;
+    if (
+      Math.abs(e.clientX - startX) > LONG_PRESS_MOVE_PX ||
+      Math.abs(e.clientY - startY) > LONG_PRESS_MOVE_PX
+    ) {
+      clearHold();
+    }
+  });
+
+  const end = (e) => {
+    if (e.pointerId !== pointerId) return;
+    clearHold();
+    try {
+      el.releasePointerCapture(e.pointerId);
+    } catch (_) {}
+  };
+  el.addEventListener("pointerup", end);
+  el.addEventListener("pointercancel", end);
+
+  el.addEventListener("click", (e) => {
+    if (e.target.closest("[data-toggle]")) return;
+    if (longPressTriggered) {
+      e.preventDefault();
+      e.stopPropagation();
+      longPressTriggered = false;
+      return;
+    }
+    openEdit(row);
+  });
+
+  el.addEventListener("contextmenu", (e) => e.preventDefault());
 }
 
 function showToast(msg) {
@@ -1228,16 +1275,7 @@ function bind() {
     })
   );
   document.querySelectorAll(".item[data-row]").forEach((b) => {
-    const row = Number(b.dataset.row);
-    bindLongPress(b, row);
-    b.addEventListener("click", (e) => {
-      if (e.target.closest("[data-toggle]")) return;
-      if (longPressTriggered) {
-        longPressTriggered = false;
-        return;
-      }
-      openEdit(row);
-    });
+    bindLongPress(b, Number(b.dataset.row));
   });
   document.querySelectorAll("[data-toggle]").forEach((b) =>
     b.addEventListener("click", (e) => togglePago(Number(b.dataset.toggle), e))

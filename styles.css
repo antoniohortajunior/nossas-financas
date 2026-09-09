@@ -135,6 +135,16 @@ body {
   text-align: left;
   font-family: inherit;
   color: inherit;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-touch-callout: none;
+  user-select: none;
+  transition: background 0.15s, border-color 0.15s, transform 0.15s;
+}
+.item.hold {
+  background: #ecfeff;
+  border-color: #99f6e4;
+  transform: scale(0.985);
 }
 .check {
   width: 22px; height: 22px; border-radius: 50%;
