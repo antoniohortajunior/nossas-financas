@@ -1,4 +1,4 @@
-const APP_VERSION = "19";
+const APP_VERSION = "20";
 const INSTALL_HINT_KEY = "financas-install-hint-v11";
 const KEY = "minhas-financas-config";
 const SCOPE =
@@ -1049,33 +1049,32 @@ function sheetView() {
           <div class="field"><label>Observações</label><input id="fObs" value="${esc(f.observacoes)}" placeholder="Opcional" /></div>
         </div>`;
   const editingDesp = !isRec && state.editingRow;
+  const deleteOverlay =
+    state.deleteConfirm && editingDesp
+      ? `
+      <div class="sheet-confirm" id="confirmDelete">
+        <div class="confirm-box">
+          <h3>Excluir lançamento?</h3>
+          <p>Deseja excluir <strong>${esc(state.deleteConfirm.descricao)}</strong>? Esta ação não pode ser desfeita.</p>
+          <div class="confirm-actions">
+            <button type="button" class="confirm-no" id="deleteNo">Não</button>
+            <button type="button" class="confirm-yes" id="deleteYes">Sim, excluir</button>
+          </div>
+        </div>
+      </div>`
+      : "";
   return `
     <div class="sheet ${state.sheetOpen ? "open" : ""}" id="sheet">
       <div class="sheet-head">
         <h2>${state.editingRow ? (isRec ? "Editar receita" : "Editar despesa") : isRec ? "Nova receita" : "Nova despesa"}</h2>
         <div class="sheet-head-actions">
-          ${editingDesp ? `<button type="button" class="sheet-del" id="btnDeleteDesp" title="Excluir despesa">🗑</button>` : ""}
-          <button type="button" class="ghost" id="closeSheet">×</button>
+          ${editingDesp ? `<button type="button" class="sheet-del" id="btnDeleteDesp" aria-label="Excluir despesa"><span>🗑</span></button>` : ""}
+          <button type="button" class="ghost" id="closeSheet" aria-label="Fechar">×</button>
         </div>
       </div>
       <div class="sheet-body">${body}</div>
       <button class="save" id="saveBtn">${state.loading ? "Salvando…" : "Salvar na planilha"}</button>
-    </div>`;
-}
-
-function confirmDeleteView() {
-  if (!state.deleteConfirm) return "";
-  const d = state.deleteConfirm;
-  return `
-    <div class="confirm-overlay" id="confirmDelete">
-      <div class="confirm-box">
-        <h3>Excluir lançamento?</h3>
-        <p>Deseja excluir <strong>${esc(d.descricao)}</strong>? Esta ação não pode ser desfeita.</p>
-        <div class="confirm-actions">
-          <button type="button" class="confirm-no" id="deleteNo">Não</button>
-          <button type="button" class="confirm-yes" id="deleteYes">Sim, excluir</button>
-        </div>
-      </div>
+      ${deleteOverlay}
     </div>`;
 }
 
@@ -1086,7 +1085,7 @@ function appView() {
   if (state.tab === "orcamento") body = orcamentoView(m);
   if (state.tab === "despesas") body = despesasView();
   if (state.tab === "receitas") body = receitasView();
-  return `<div class="app ${state.loading ? "busy" : ""}">${body}${tabs()}${sheetView()}${confirmDeleteView()}
+  return `<div class="app ${state.loading ? "busy" : ""}">${body}${tabs()}${sheetView()}
     <div class="toast ${state.toast ? "show" : ""}">${esc(state.toast)}</div></div>`;
 }
 
@@ -1364,7 +1363,31 @@ function showToast(msg) {
   }, 2400);
 }
 
+function bindRootActions() {
+  const root = document.getElementById("root");
+  if (!root || root.dataset.actionsBound) return;
+  root.dataset.actionsBound = "1";
+  root.addEventListener("click", (e) => {
+    if (e.target.closest("#btnDeleteDesp")) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (state.editingRow) openDeleteConfirm(state.editingRow);
+      return;
+    }
+    if (e.target.closest("#deleteNo")) {
+      e.preventDefault();
+      closeDeleteConfirm();
+      return;
+    }
+    if (e.target.closest("#deleteYes")) {
+      e.preventDefault();
+      if (state.deleteConfirm?.row) deleteExpense(state.deleteConfirm.row);
+    }
+  });
+}
+
 function bind() {
+  bindRootActions();
   const on = (id, ev, fn) => {
     const el = document.getElementById(id);
     if (el) el.addEventListener(ev, fn);
@@ -1460,13 +1483,6 @@ function bind() {
   document.querySelectorAll("[data-toggle-rec]").forEach((b) =>
     b.addEventListener("click", (e) => togglePago(Number(b.dataset.toggleRec), e, "receita"))
   );
-  on("btnDeleteDesp", "click", () => {
-    if (state.editingRow) openDeleteConfirm(state.editingRow);
-  });
-  on("deleteNo", "click", closeDeleteConfirm);
-  on("deleteYes", "click", () => {
-    if (state.deleteConfirm?.row) deleteExpense(state.deleteConfirm.row);
-  });
 }
 
 async function boot() {
