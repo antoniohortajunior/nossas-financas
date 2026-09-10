@@ -90,6 +90,7 @@ body {
   padding: 6px;
   z-index: 6;
 }
+.tabs.tabs-4 { grid-template-columns: repeat(4, 1fr); }
 .tab {
   border: 0;
   background: transparent;
@@ -99,7 +100,29 @@ body {
   font-weight: 650;
   color: var(--muted);
 }
+.tabs-4 .tab { font-size: 10px; padding: 0 2px; }
 .tab.on { background: var(--teal-soft); color: var(--teal-2); }
+.title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 2px;
+}
+.title-row .title { margin: 0; }
+.sort-btns { display: flex; gap: 6px; flex-shrink: 0; }
+.sort-btn {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 99px;
+  padding: 5px 9px;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: lowercase;
+}
+.sort-btn.on { background: var(--ink); color: #fff; border-color: var(--ink); }
 .search {
   margin-top: 14px;
   width: 100%;
@@ -135,16 +158,6 @@ body {
   text-align: left;
   font-family: inherit;
   color: inherit;
-  cursor: pointer;
-  touch-action: manipulation;
-  -webkit-touch-callout: none;
-  user-select: none;
-  transition: background 0.15s, border-color 0.15s, transform 0.15s;
-}
-.item.hold {
-  background: #ecfeff;
-  border-color: #99f6e4;
-  transform: scale(0.985);
 }
 .check {
   width: 22px; height: 22px; border-radius: 50%;
@@ -256,60 +269,6 @@ body {
   margin: 8px 18px calc(18px + var(--safe-bot));
   border: 0; background: var(--teal); color: #fff; border-radius: 16px;
   height: 50px; font-family: inherit; font-size: 15px; font-weight: 700;
-}
-.confirm-overlay {
-  position: fixed;
-  inset: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  width: min(430px, 100%);
-  background: rgba(15, 23, 42, 0.45);
-  z-index: 14;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-}
-.confirm-box {
-  width: 100%;
-  background: #fff;
-  border-radius: 20px;
-  padding: 20px;
-  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.18);
-}
-.confirm-box h3 {
-  margin: 0;
-  font-size: 18px;
-  letter-spacing: -0.03em;
-}
-.confirm-box p {
-  margin: 10px 0 0;
-  font-size: 14px;
-  line-height: 1.45;
-  color: var(--muted);
-}
-.confirm-actions {
-  display: flex;
-  gap: 10px;
-  margin-top: 18px;
-}
-.confirm-no,
-.confirm-yes {
-  flex: 1;
-  border: 0;
-  border-radius: 14px;
-  height: 44px;
-  font-family: inherit;
-  font-size: 14px;
-  font-weight: 700;
-  cursor: pointer;
-}
-.confirm-no {
-  background: #e8eef3;
-  color: var(--ink);
-}
-.confirm-yes {
-  background: var(--rose);
-  color: #fff;
 }
 .toast {
   position: fixed;

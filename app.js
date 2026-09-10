@@ -1,4 +1,4 @@
-const APP_VERSION = "13";
+const APP_VERSION = "15";
 const INSTALL_HINT_KEY = "financas-install-hint-v11";
 const KEY = "minhas-financas-config";
 const SCOPE =
@@ -31,19 +31,30 @@ const state = {
   listas: { categorias: [], tipos: [], prioridades: [], pagamentos: [], contas: [] },
   query: "",
   filtro: "todas",
+  despSort: "vencimento",
   sheetOpen: false,
+  sheetKind: "despesa",
   moreOpen: false,
   editingRow: null,
   toast: "",
   hint: "",
   booting: true,
-  deleteConfirm: null,
   form: blankForm(),
 };
 
-let longPressTriggered = false;
-
-function blankForm() {
+function blankForm(kind = "despesa") {
+  if (kind === "receita") {
+    return {
+      pago: false,
+      descricao: "",
+      fonte: "Salário",
+      vencimento: todayISO(),
+      previsto: "",
+      realizado: "",
+      conta: "Nubank",
+      observacoes: "",
+    };
+  }
   return {
     pago: false,
     descricao: "",
@@ -184,7 +195,7 @@ function mapHeaders(row) {
     fonte: ["fonte"],
     descricao: ["descrição", "descricao"],
     tipo: ["tipo"],
-    vencimento: ["vencimento"],
+    vencimento: ["vencimento", "data prevista"],
     prioridade: ["prioridade"],
     status: ["status"],
     dias: ["dias"],
@@ -383,6 +394,7 @@ function parseTables(batch) {
     prioridades: pickCol(7).length ? pickCol(7) : ["Alta", "Média", "Baixa"],
     pagamentos: pickCol(8).length ? pickCol(8) : ["Pix", "Boleto", "Crédito", "Débito"],
     contas: pickCol(9).length ? pickCol(9) : ["Nubank", "Itaú", "Carteira"],
+    fontes: pickCol(11).length ? pickCol(11) : ["Salário", "Extra", "Rendimentos"],
   };
 
   function parseSheet(values, kind) {
@@ -453,6 +465,7 @@ function parseTables(batch) {
   const rec = parseSheet(byRange.Receitas || [], "receita");
   const orc = parseSheet(byRange.Orçamento || byRange.Orcamento || [], "orcamento");
   state._despMeta = d;
+  state._recMeta = rec;
   state.despesas = d.rows;
   state.receitas = rec.rows;
   state.orcamento = orc.rows;
@@ -590,16 +603,77 @@ function metrics() {
   };
 }
 
-function filteredDespesas() {
-  const q = state.query.trim().toLowerCase();
-  return monthDespesas().filter((d) => {
-    if (state.filtro === "pagar" && d.pago) return false;
-    if (state.filtro === "atrasadas" && !String(d.status).toLowerCase().includes("atras")) return false;
-    if (q && !String(d.descricao).toLowerCase().includes(q) && !String(d.categoria).toLowerCase().includes(q)) {
-      return false;
+function despValor(d) {
+  return Number(d.pago ? d.realizado || d.previsto : d.previsto) || 0;
+}
+
+function isValueQuery(q) {
+  const t = String(q || "").trim();
+  if (!t || !/\d/.test(t)) return false;
+  return /^[\d.,\s]+$/.test(t);
+}
+
+function parseQueryDate(q) {
+  const m = String(q || "")
+    .trim()
+    .match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (!m) return null;
+  let y = Number(m[3]);
+  if (m[3].length === 2) y = 2000 + y;
+  return `${y}-${String(Number(m[2])).padStart(2, "0")}-${String(Number(m[1])).padStart(2, "0")}`;
+}
+
+function sortedDespesas() {
+  let list = monthDespesas();
+  if (state.filtro === "pagar") list = list.filter((d) => !d.pago);
+  if (state.filtro === "atrasadas") list = list.filter((d) => String(d.status).toLowerCase().includes("atras"));
+
+  const q = state.query.trim();
+  let sortMode = state.despSort || "vencimento";
+
+  if (q) {
+    if (isValueQuery(q)) {
+      sortMode = "valor";
+      const minVal = num(q);
+      list = list.filter((d) => despValor(d) >= minVal);
+    } else {
+      const qDate = parseQueryDate(q);
+      if (qDate) {
+        sortMode = "vencimento";
+        list = list.filter((d) => {
+          const v = d.vencimento?.slice(0, 10) || "";
+          return v && v >= qDate;
+        });
+      } else {
+        const ql = q.toLowerCase();
+        list = list.filter(
+          (d) =>
+            String(d.descricao).toLowerCase().includes(ql) ||
+            String(d.categoria).toLowerCase().includes(ql)
+        );
+      }
     }
-    return true;
-  });
+  }
+
+  if (sortMode === "valor") {
+    list.sort((a, b) => despValor(a) - despValor(b));
+  } else {
+    list.sort((a, b) => {
+      const va = a.vencimento?.slice(0, 10) || "";
+      const vb = b.vencimento?.slice(0, 10) || "";
+      return vb.localeCompare(va);
+    });
+  }
+  return list;
+}
+
+function receitasMetrics() {
+  const rs = monthReceitas();
+  return {
+    previsto: rs.reduce((a, x) => a + x.previsto, 0),
+    realizado: rs.reduce((a, x) => a + x.realizado, 0),
+    atrasadas: rs.filter((x) => String(x.status).toLowerCase().includes("atras")).length,
+  };
 }
 
 function isAndroid() {
@@ -741,10 +815,11 @@ function setupView() {
 
 function tabs() {
   return `
-    <nav class="tabs">
+    <nav class="tabs tabs-4">
       <button class="tab ${state.tab === "painel" ? "on" : ""}" data-tab="painel">Painel</button>
       <button class="tab ${state.tab === "orcamento" ? "on" : ""}" data-tab="orcamento">Orçamento</button>
       <button class="tab ${state.tab === "despesas" ? "on" : ""}" data-tab="despesas">Despesas</button>
+      <button class="tab ${state.tab === "receitas" ? "on" : ""}" data-tab="receitas">Receitas</button>
     </nav>`;
 }
 
@@ -816,21 +891,27 @@ function orcamentoView(m) {
 }
 
 function despesasView() {
-  const list = filteredDespesas()
+  const list = sortedDespesas()
     .map(
       (d) => `
-      <div class="item" role="button" tabindex="0" data-row="${d.sheetRow}">
+      <button type="button" class="item" data-row="${d.sheetRow}" data-kind="despesa">
         <span class="check ${d.pago ? "yes" : ""}" data-toggle="${d.sheetRow}">${d.pago ? "✓" : ""}</span>
         <span class="mid"><b>${esc(d.descricao || "(sem descrição)")}</b><small>${esc(d.categoria)} · ${d.vencimento ? "vence " + isoToBR(d.vencimento) : d.tipo || ""}</small></span>
-        <span class="right"><b>${brl(d.pago ? d.realizado || d.previsto : d.previsto)}</b><span class="pill ${pillClass(d.status)}">${esc(d.status || (d.pago ? "Pago" : "Pendente"))}</span></span>
-      </div>`
+        <span class="right"><b>${brl(despValor(d))}</b><span class="pill ${pillClass(d.status)}">${esc(d.status || (d.pago ? "Pago" : "Pendente"))}</span></span>
+      </button>`
     )
     .join("");
   return `
-    <div class="scroll">
+    <div class="scroll" id="despScroll">
       <div class="hello">Lançamentos do mês</div>
-      <div class="title">Despesas</div>
-      <input class="search" id="q" placeholder="Buscar descrição…  ex.: uber" value="${esc(state.query)}" />
+      <div class="title-row">
+        <div class="title">Despesas</div>
+        <div class="sort-btns">
+          <button type="button" class="sort-btn ${state.despSort === "vencimento" ? "on" : ""}" data-sort="vencimento">vencimento</button>
+          <button type="button" class="sort-btn ${state.despSort === "valor" ? "on" : ""}" data-sort="valor">valor</button>
+        </div>
+      </div>
+      <input class="search" id="q" placeholder="Descrição, valor (ex.: 150,00) ou data (dd/mm/aa)" value="${esc(state.query)}" />
       <div class="chips">
         <button class="chip ${state.filtro === "todas" ? "on" : ""}" data-filtro="todas">Todas</button>
         <button class="chip ${state.filtro === "pagar" ? "on" : ""}" data-filtro="pagar">A pagar</button>
@@ -841,16 +922,60 @@ function despesasView() {
     <button class="fab" id="fab">+</button>`;
 }
 
+function receitasView() {
+  const rm = receitasMetrics();
+  const list = monthReceitas()
+    .slice()
+    .sort((a, b) => {
+      const va = a.vencimento?.slice(0, 10) || "";
+      const vb = b.vencimento?.slice(0, 10) || "";
+      return vb.localeCompare(va);
+    })
+    .map(
+      (r) => `
+      <button type="button" class="item" data-row="${r.sheetRow}" data-kind="receita">
+        <span class="check ${r.pago ? "yes" : ""}" data-toggle-rec="${r.sheetRow}">${r.pago ? "✓" : ""}</span>
+        <span class="mid"><b>${esc(r.descricao || r.categoria || "(sem descrição)")}</b><small>${esc(r.categoria)} · ${r.vencimento ? isoToBR(r.vencimento) : ""}</small></span>
+        <span class="right"><b>${brl(r.pago ? r.realizado || r.previsto : r.previsto)}</b><span class="pill ${pillClass(r.status)}">${esc(r.status || (r.pago ? "Recebido" : "Pendente"))}</span></span>
+      </button>`
+    )
+    .join("");
+  return `
+    <div class="scroll">
+      <div class="hello">Entradas do mês</div>
+      <div class="title">Receitas</div>
+      <div class="grid2" style="margin-top:10px">
+        <div class="kpi"><span>PREVISTO</span><b>${brl(rm.previsto)}</b></div>
+        <div class="kpi"><span>REALIZADO</span><b style="color:var(--emerald)">${brl(rm.realizado)}</b></div>
+      </div>
+      ${rm.atrasadas ? `<div class="alert" style="margin-top:10px"><span class="dot" style="background:var(--rose)"></span> ${rm.atrasadas} receita(s) atrasada(s)</div>` : ""}
+      <div class="section">Lançamentos</div>
+      ${list || `<div class="empty">Nenhuma receita neste mês. Toque no + para lançar.</div>`}
+    </div>
+    <button class="fab" id="fabRec">+</button>`;
+}
+
 function sheetView() {
   const f = state.form;
   const L = state.listas;
-  return `
-    <div class="sheet ${state.sheetOpen ? "open" : ""}" id="sheet">
-      <div class="sheet-head">
-        <h2>${state.editingRow ? "Editar despesa" : "Nova despesa"}</h2>
-        <button class="ghost" id="closeSheet">×</button>
-      </div>
-      <div class="sheet-body">
+  const isRec = state.sheetKind === "receita";
+  const body = isRec
+    ? `
+        <div class="field"><label>Descrição</label><input id="fDesc" value="${esc(f.descricao)}" placeholder="Ex.: Salário março" /></div>
+        <div class="field"><label>Fonte</label><select id="fFonte">${options(L.fontes, f.fonte || f.categoria)}</select></div>
+        <div class="row2">
+          <div class="field"><label>Previsto</label><input id="fPrev" inputmode="decimal" value="${esc(f.previsto)}" placeholder="0,00" /></div>
+          <div class="field"><label>Data prevista</label><input id="fVenc" type="date" value="${esc(f.vencimento)}" /></div>
+        </div>
+        <div class="toggle">Já recebi <div class="switch ${f.pago ? "on" : ""}" id="pagoSwitch"><i></i></div></div>
+        <div class="field ${f.pago ? "" : "hidden"}" id="realizadoField">
+          <label>Realizado</label><input id="fReal" inputmode="decimal" value="${esc(f.realizado)}" placeholder="0,00" />
+        </div>
+        <div class="row2">
+          <div class="field"><label>Conta</label><select id="fConta">${options(L.contas, f.conta)}</select></div>
+          <div class="field"><label>Observações</label><input id="fObs" value="${esc(f.observacoes)}" placeholder="Opcional" /></div>
+        </div>`
+    : `
         <div class="field"><label>Descrição</label><input id="fDesc" value="${esc(f.descricao)}" placeholder="Ex.: IPTU casa da praia" /></div>
         <div class="field"><label>Categoria</label><select id="fCat">${options(L.categorias, f.categoria)}</select></div>
         <div class="row2">
@@ -876,25 +1001,15 @@ function sheetView() {
             <div class="field"><label>Parcela</label><input id="fParc" value="${esc(f.parcela)}" placeholder="Ex.: 3/12" /></div>
           </div>
           <div class="field"><label>Observações</label><input id="fObs" value="${esc(f.observacoes)}" placeholder="Opcional" /></div>
-        </div>
-      </div>
-      <button class="save" id="saveBtn">${state.loading ? "Salvando…" : "Salvar na planilha"}</button>
-    </div>`;
-}
-
-function confirmDeleteView() {
-  if (!state.deleteConfirm) return "";
-  const d = state.deleteConfirm;
+        </div>`;
   return `
-    <div class="confirm-overlay" id="confirmDelete">
-      <div class="confirm-box">
-        <h3>Excluir lançamento?</h3>
-        <p>Deseja excluir <strong>${esc(d.descricao)}</strong>? Esta ação não pode ser desfeita.</p>
-        <div class="confirm-actions">
-          <button type="button" class="confirm-no" id="deleteNo">Não</button>
-          <button type="button" class="confirm-yes" id="deleteYes">Sim, excluir</button>
-        </div>
+    <div class="sheet ${state.sheetOpen ? "open" : ""}" id="sheet">
+      <div class="sheet-head">
+        <h2>${state.editingRow ? (isRec ? "Editar receita" : "Editar despesa") : isRec ? "Nova receita" : "Nova despesa"}</h2>
+        <button class="ghost" id="closeSheet">×</button>
       </div>
+      <div class="sheet-body">${body}</div>
+      <button class="save" id="saveBtn">${state.loading ? "Salvando…" : "Salvar na planilha"}</button>
     </div>`;
 }
 
@@ -904,7 +1019,8 @@ function appView() {
   if (state.tab === "painel") body = painelView(m);
   if (state.tab === "orcamento") body = orcamentoView(m);
   if (state.tab === "despesas") body = despesasView();
-  return `<div class="app ${state.loading ? "busy" : ""}">${body}${tabs()}${sheetView()}${confirmDeleteView()}
+  if (state.tab === "receitas") body = receitasView();
+  return `<div class="app ${state.loading ? "busy" : ""}">${body}${tabs()}${sheetView()}
     <div class="toast ${state.toast ? "show" : ""}">${esc(state.toast)}</div></div>`;
 }
 
@@ -927,17 +1043,27 @@ function render() {
       }
     }
   }
+  if (state.tab === "despesas" && state.query.trim() && (isValueQuery(state.query) || parseQueryDate(state.query))) {
+    requestAnimationFrame(() => {
+      document.querySelector("#despScroll .item")?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    });
+  }
 }
 
 function readFormFromDom() {
   const $ = (id) => document.getElementById(id);
   if (!$("fDesc")) return;
   state.form.descricao = $("fDesc").value;
-  state.form.categoria = $("fCat").value;
   state.form.previsto = $("fPrev").value;
   state.form.vencimento = $("fVenc").value;
   state.form.realizado = $("fReal") ? $("fReal").value : state.form.realizado;
-  if ($("fTipo")) {
+  if ($("fFonte")) {
+    state.form.fonte = $("fFonte").value;
+    state.form.conta = $("fConta").value;
+    state.form.observacoes = $("fObs").value;
+  }
+  if ($("fCat")) {
+    state.form.categoria = $("fCat").value;
     state.form.tipo = $("fTipo").value;
     state.form.prioridade = $("fPrio").value;
     state.form.pagamento = $("fPag").value;
@@ -948,81 +1074,113 @@ function readFormFromDom() {
   }
 }
 
-function openNew() {
+function openNew(kind = "despesa") {
   state.editingRow = null;
   state.moreOpen = false;
-  state.form = blankForm();
-  if (state.listas.categorias[0]) state.form.categoria = state.listas.categorias[0];
+  state.sheetKind = kind;
+  state.form = blankForm(kind);
+  if (kind === "despesa" && state.listas.categorias[0]) state.form.categoria = state.listas.categorias[0];
+  if (kind === "receita" && state.listas.fontes[0]) state.form.fonte = state.listas.fontes[0];
   state.sheetOpen = true;
   render();
 }
 
-function openEdit(row) {
-  const d = state.despesas.find((x) => x.sheetRow === row);
+function openEdit(row, kind = "despesa") {
+  const list = kind === "receita" ? state.receitas : state.despesas;
+  const d = list.find((x) => x.sheetRow === row);
   if (!d) return;
   state.editingRow = row;
+  state.sheetKind = kind;
   state.moreOpen = false;
-  state.form = {
-    pago: d.pago,
-    descricao: d.descricao,
-    categoria: d.categoria,
-    tipo: d.tipo || "Variável",
-    vencimento: d.vencimento || todayISO(),
-    prioridade: d.prioridade || "Média",
-    previsto: d.previsto ? String(d.previsto) : "",
-    realizado: d.realizado ? String(d.realizado) : "",
-    pagamento: d.pagamento || "Pix",
-    conta: d.conta || "Nubank",
-    recorrente: d.recorrente || "Não",
-    parcela: d.parcela,
-    observacoes: d.observacoes,
-  };
+  if (kind === "receita") {
+    state.form = {
+      pago: d.pago,
+      descricao: d.descricao,
+      fonte: d.categoria,
+      vencimento: d.vencimento || todayISO(),
+      previsto: d.previsto ? String(d.previsto) : "",
+      realizado: d.realizado ? String(d.realizado) : "",
+      conta: d.conta || "Nubank",
+      observacoes: d.observacoes,
+    };
+  } else {
+    state.form = {
+      pago: d.pago,
+      descricao: d.descricao,
+      categoria: d.categoria,
+      tipo: d.tipo || "Variável",
+      vencimento: d.vencimento || todayISO(),
+      prioridade: d.prioridade || "Média",
+      previsto: d.previsto ? String(d.previsto) : "",
+      realizado: d.realizado ? String(d.realizado) : "",
+      pagamento: d.pagamento || "Pix",
+      conta: d.conta || "Nubank",
+      recorrente: d.recorrente || "Não",
+      parcela: d.parcela,
+      observacoes: d.observacoes,
+    };
+  }
   state.sheetOpen = true;
   render();
 }
 
-function firstEmptyRow(idx) {
-  const used = new Set(state.despesas.map((d) => d.sheetRow));
-  const start = (state._despMeta?.headerRow ?? 4) + 2;
+function firstEmptyRow(meta, rows) {
+  const used = new Set(rows.map((d) => d.sheetRow));
+  const start = (meta?.headerRow ?? 4) + 2;
   for (let r = start; r < start + 400; r++) {
     if (!used.has(r)) return r;
   }
-  return start + state.despesas.length;
+  return start + rows.length;
 }
 
-async function saveExpense() {
+async function saveSheet() {
   readFormFromDom();
   const f = state.form;
-  if (!f.descricao.trim()) {
-    showToast("Preencha a descrição.");
+  const isRec = state.sheetKind === "receita";
+  const label = isRec ? "fonte ou descrição" : "descrição";
+  if (!f.descricao.trim() && !(isRec && f.fonte)) {
+    showToast(`Preencha a ${label}.`);
     return;
   }
-  const idx = state._despMeta?.idx || {};
-  const row = state.editingRow || firstEmptyRow(idx);
+  const idx = (isRec ? state._recMeta : state._despMeta)?.idx || {};
+  const sheet = isRec ? "Receitas" : "Despesas";
+  const row = state.editingRow || firstEmptyRow(isRec ? state._recMeta : state._despMeta, isRec ? state.receitas : state.despesas);
   const competencia = `${state.ano}-${String(state.mesNum).padStart(2, "0")}-01`;
   const previsto = num(f.previsto);
   const realizado = f.pago ? num(f.realizado || f.previsto) : num(f.realizado);
-  const writes = {
-    pago: f.pago,
-    competencia: isoToBR(competencia),
-    categoria: f.categoria,
-    descricao: f.descricao.trim(),
-    tipo: f.tipo,
-    vencimento: isoToBR(f.vencimento),
-    prioridade: f.prioridade,
-    previsto,
-    realizado: f.pago ? realizado : realizado || "",
-    pagamento: f.pagamento,
-    conta: f.conta,
-    recorrente: f.recorrente,
-    parcela: f.parcela,
-    observacoes: f.observacoes,
-  };
+  const writes = isRec
+    ? {
+        pago: f.pago,
+        competencia: isoToBR(competencia),
+        categoria: f.fonte || f.categoria,
+        descricao: f.descricao.trim() || f.fonte,
+        vencimento: isoToBR(f.vencimento),
+        previsto,
+        realizado: f.pago ? realizado : realizado || "",
+        conta: f.conta,
+        observacoes: f.observacoes,
+      }
+    : {
+        pago: f.pago,
+        competencia: isoToBR(competencia),
+        categoria: f.categoria,
+        descricao: f.descricao.trim(),
+        tipo: f.tipo,
+        vencimento: isoToBR(f.vencimento),
+        prioridade: f.prioridade,
+        previsto,
+        realizado: f.pago ? realizado : realizado || "",
+        pagamento: f.pagamento,
+        conta: f.conta,
+        recorrente: f.recorrente,
+        parcela: f.parcela,
+        observacoes: f.observacoes,
+      };
   const data = [];
   for (const [field, value] of Object.entries(writes)) {
     if (idx[field] == null) continue;
     data.push({
-      range: `Despesas!${colLetter(idx[field])}${row}`,
+      range: `${sheet}!${colLetter(idx[field])}${row}`,
       values: [[value]],
     });
   }
@@ -1044,9 +1202,11 @@ async function saveExpense() {
   }
 }
 
-async function togglePago(row, ev) {
+async function togglePago(row, ev, kind = "despesa") {
   ev.stopPropagation();
-  const d = state.despesas.find((x) => x.sheetRow === row);
+  const list = kind === "receita" ? state.receitas : state.despesas;
+  const sheet = kind === "receita" ? "Receitas" : "Despesas";
+  const d = list.find((x) => x.sheetRow === row);
   if (!d || d.idx?.pago == null) return;
   const next = !d.pago;
   try {
@@ -1055,9 +1215,9 @@ async function togglePago(row, ev) {
       body: JSON.stringify({
         valueInputOption: "USER_ENTERED",
         data: [
-          { range: `Despesas!${colLetter(d.idx.pago)}${row}`, values: [[next]] },
+          { range: `${sheet}!${colLetter(d.idx.pago)}${row}`, values: [[next]] },
           ...(next && !d.realizado && d.previsto
-            ? [{ range: `Despesas!${colLetter(d.idx.realizado)}${row}`, values: [[d.previsto]] }]
+            ? [{ range: `${sheet}!${colLetter(d.idx.realizado)}${row}`, values: [[d.previsto]] }]
             : []),
         ],
       }),
@@ -1066,129 +1226,6 @@ async function togglePago(row, ev) {
   } catch (err) {
     showToast(err.message);
   }
-}
-
-async function getDespesasSheetId() {
-  if (state._despSheetId != null) return state._despSheetId;
-  const data = await api("?fields=sheets(properties(sheetId,title))");
-  const sheet = (data.sheets || []).find((s) => s.properties?.title === "Despesas");
-  if (!sheet) throw new Error("Aba Despesas não encontrada na planilha.");
-  state._despSheetId = sheet.properties.sheetId;
-  return state._despSheetId;
-}
-
-function openDeleteConfirm(row) {
-  const d = state.despesas.find((x) => x.sheetRow === row);
-  if (!d) return;
-  state.deleteConfirm = { row, descricao: d.descricao || "(sem descrição)" };
-  render();
-}
-
-function closeDeleteConfirm() {
-  state.deleteConfirm = null;
-  render();
-}
-
-async function deleteExpense(row) {
-  const sheetId = await getDespesasSheetId();
-  state.loading = true;
-  state.deleteConfirm = null;
-  render();
-  try {
-    await api(":batchUpdate", {
-      method: "POST",
-      body: JSON.stringify({
-        requests: [
-          {
-            deleteDimension: {
-              range: {
-                sheetId,
-                dimension: "ROWS",
-                startIndex: row - 1,
-                endIndex: row,
-              },
-            },
-          },
-        ],
-      }),
-    });
-    showToast("Lançamento excluído.");
-    await refresh();
-  } catch (err) {
-    state.loading = false;
-    showToast(err.message);
-    render();
-  }
-}
-
-const LONG_PRESS_MS = 2000;
-const LONG_PRESS_MOVE_PX = 14;
-
-function bindLongPress(el, row) {
-  let timer = null;
-  let startX = 0;
-  let startY = 0;
-  let pointerId = null;
-
-  const clearHold = () => {
-    clearTimeout(timer);
-    timer = null;
-    pointerId = null;
-    el.classList.remove("hold");
-  };
-
-  el.addEventListener("pointerdown", (e) => {
-    if (e.pointerType === "mouse" && e.button !== 0) return;
-    if (pointerId != null) return;
-    pointerId = e.pointerId;
-    startX = e.clientX;
-    startY = e.clientY;
-    longPressTriggered = false;
-    el.classList.add("hold");
-    try {
-      el.setPointerCapture(e.pointerId);
-    } catch (_) {}
-    timer = setTimeout(() => {
-      timer = null;
-      longPressTriggered = true;
-      el.classList.remove("hold");
-      if (navigator.vibrate) navigator.vibrate(50);
-      openDeleteConfirm(row);
-    }, LONG_PRESS_MS);
-  });
-
-  el.addEventListener("pointermove", (e) => {
-    if (e.pointerId !== pointerId || !timer) return;
-    if (
-      Math.abs(e.clientX - startX) > LONG_PRESS_MOVE_PX ||
-      Math.abs(e.clientY - startY) > LONG_PRESS_MOVE_PX
-    ) {
-      clearHold();
-    }
-  });
-
-  const end = (e) => {
-    if (e.pointerId !== pointerId) return;
-    clearHold();
-    try {
-      el.releasePointerCapture(e.pointerId);
-    } catch (_) {}
-  };
-  el.addEventListener("pointerup", end);
-  el.addEventListener("pointercancel", end);
-
-  el.addEventListener("click", (e) => {
-    if (e.target.closest("[data-toggle]")) return;
-    if (longPressTriggered) {
-      e.preventDefault();
-      e.stopPropagation();
-      longPressTriggered = false;
-      return;
-    }
-    openEdit(row);
-  });
-
-  el.addEventListener("contextmenu", (e) => e.preventDefault());
 }
 
 function showToast(msg) {
@@ -1242,12 +1279,12 @@ function bind() {
     b.addEventListener("click", () => {
       state.tab = b.dataset.tab;
       state.sheetOpen = false;
-      state.deleteConfirm = null;
       render();
     })
   );
   on("btnReload", "click", () => refresh());
-  on("fab", "click", openNew);
+  on("fab", "click", () => openNew("despesa"));
+  on("fabRec", "click", () => openNew("receita"));
   on("closeSheet", "click", () => {
     state.sheetOpen = false;
     render();
@@ -1263,27 +1300,37 @@ function bind() {
     if (state.form.pago && !state.form.realizado) state.form.realizado = state.form.previsto;
     render();
   });
-  on("saveBtn", "click", saveExpense);
+  on("saveBtn", "click", saveSheet);
   on("q", "input", (e) => {
     state.query = e.target.value;
+    if (isValueQuery(state.query)) state.despSort = "valor";
+    else if (parseQueryDate(state.query)) state.despSort = "vencimento";
     render();
   });
+  document.querySelectorAll("[data-sort]").forEach((b) =>
+    b.addEventListener("click", () => {
+      state.despSort = b.dataset.sort;
+      render();
+    })
+  );
   document.querySelectorAll("[data-filtro]").forEach((b) =>
     b.addEventListener("click", () => {
       state.filtro = b.dataset.filtro;
       render();
     })
   );
-  document.querySelectorAll(".item[data-row]").forEach((b) => {
-    bindLongPress(b, Number(b.dataset.row));
-  });
-  document.querySelectorAll("[data-toggle]").forEach((b) =>
-    b.addEventListener("click", (e) => togglePago(Number(b.dataset.toggle), e))
+  document.querySelectorAll(".item[data-row]").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      if (e.target.closest("[data-toggle]") || e.target.closest("[data-toggle-rec]")) return;
+      openEdit(Number(b.dataset.row), b.dataset.kind || "despesa");
+    })
   );
-  on("deleteNo", "click", closeDeleteConfirm);
-  on("deleteYes", "click", () => {
-    if (state.deleteConfirm?.row) deleteExpense(state.deleteConfirm.row);
-  });
+  document.querySelectorAll("[data-toggle]").forEach((b) =>
+    b.addEventListener("click", (e) => togglePago(Number(b.dataset.toggle), e, "despesa"))
+  );
+  document.querySelectorAll("[data-toggle-rec]").forEach((b) =>
+    b.addEventListener("click", (e) => togglePago(Number(b.dataset.toggleRec), e, "receita"))
+  );
 }
 
 async function boot() {
