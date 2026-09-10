@@ -1,4 +1,4 @@
-const APP_VERSION = "20";
+const APP_VERSION = "22";
 const INSTALL_HINT_KEY = "financas-install-hint-v11";
 const KEY = "minhas-financas-config";
 const SCOPE =
@@ -223,7 +223,8 @@ function mapHeaders(row) {
     diferenca: ["diferença", "diferenca"],
     situacao: ["situação", "situacao"],
     dataPagamento: ["pagamento", "data pagamento", "data do pagamento", "data pago", "dt pagamento", "dt. pagamento"],
-    formaPagamento: ["forma pagamento", "forma de pagamento", "meio pagamento", "pagamentos"],
+    dataRecebimento: ["recebimento", "data recebimento", "data do recebimento", "dt recebimento"],
+    formaPagamento: ["forma pagamento", "forma de pagamento", "meio pagamento", "forma"],
     conta: ["conta"],
     recorrente: ["recorrente"],
     parcela: ["parcela"],
@@ -403,6 +404,7 @@ function parseTables(batch) {
   state.mesNum = Number(String(cfg[3]?.[0] ?? "").replace(",", ".")) || (idxMes >= 0 ? idxMes + 1 : new Date().getMonth() + 1);
   state.mesStart = serialToISO(cfg[5]?.[0]);
   state.mesEnd = serialToISO(cfg[6]?.[0]);
+  state.saldoInicial = num(cfg[8]?.[0]);
 
   const listas = byRange.Listas || [];
   const pickCol = (c, from = 1) =>
@@ -467,6 +469,7 @@ function parseTables(batch) {
         pct: num(r[idx.pct]),
         situacao: String(r[idx.situacao] || ""),
         dataPagamento: serialToISO(r[idx.dataPagamento]),
+        dataRecebimento: serialToISO(r[idx.dataRecebimento]),
         formaPagamento: String(r[idx.formaPagamento] || ""),
         conta: String(r[idx.conta] || ""),
         recorrente: String(r[idx.recorrente] || "Não"),
@@ -541,7 +544,7 @@ async function refresh() {
   render();
   try {
     const data = await batchGetRanges([
-      "Config!B4:B11",
+      "Config!B4:B12",
       "Despesas!A1:T400",
       "Receitas!A1:L200",
       "Listas!A4:L20",
@@ -593,7 +596,9 @@ function classeGasto(partial) {
 function metrics() {
   const ds = monthDespesas();
   const rs = monthReceitas();
-  const receitas = rs.reduce((a, x) => a + x.realizado, 0);
+  const receitas = rs
+    .filter((x) => x.pago)
+    .reduce((a, x) => a + (x.realizado || x.previsto || 0), 0);
   const previsto = ds.reduce((a, x) => a + x.previsto, 0);
   const realizado = ds.reduce((a, x) => a + x.realizado, 0);
   const pagar = ds.filter((x) => !x.pago).reduce((a, x) => a + x.previsto, 0);
@@ -629,7 +634,39 @@ function despValor(d) {
 
 function despPgtoDate(d) {
   if (!d.pago) return "";
-  return d.dataPagamento?.slice(0, 10) || "";
+  return d.dataPagamento?.slice(0, 10) || d.vencimento?.slice(0, 10) || "";
+}
+
+function recRecebDate(r) {
+  if (!r.pago) return "";
+  return r.dataRecebimento?.slice(0, 10) || r.vencimento?.slice(0, 10) || "";
+}
+
+function fluxoCaixa() {
+  const start = state.mesStart?.slice(0, 10);
+  const end = state.mesEnd?.slice(0, 10);
+  if (!start || !end) return [];
+  const saldo0 = Number(state.saldoInicial) || 0;
+  const days = [];
+  let d = new Date(`${start}T12:00:00`);
+  const endD = new Date(`${end}T12:00:00`);
+  while (d <= endD) {
+    days.push(d.toISOString().slice(0, 10));
+    d.setDate(d.getDate() + 1);
+  }
+  let prevFinal = saldo0;
+  return days.map((day, i) => {
+    const despesas = state.despesas
+      .filter((x) => x.pago && despPgtoDate(x) === day)
+      .reduce((a, x) => a + (x.realizado || x.previsto || 0), 0);
+    const receitas = state.receitas
+      .filter((x) => x.pago && recRecebDate(x) === day)
+      .reduce((a, x) => a + (x.realizado || x.previsto || 0), 0);
+    const saldoInicial = i === 0 ? saldo0 : prevFinal;
+    const saldoFinal = saldoInicial - despesas + receitas;
+    prevFinal = saldoFinal;
+    return { dia: day, saldoInicial, despesas, receitas, saldoFinal };
+  });
 }
 
 function despSubline(d) {
@@ -716,7 +753,9 @@ function receitasMetrics() {
   const rs = monthReceitas();
   return {
     previsto: rs.reduce((a, x) => a + x.previsto, 0),
-    realizado: rs.reduce((a, x) => a + x.realizado, 0),
+    realizado: rs
+      .filter((x) => x.pago)
+      .reduce((a, x) => a + (x.realizado || x.previsto || 0), 0),
     atrasadas: rs.filter((x) => String(x.status).toLowerCase().includes("atras")).length,
   };
 }
@@ -860,12 +899,51 @@ function setupView() {
 
 function tabs() {
   return `
-    <nav class="tabs tabs-4">
+    <nav class="tabs tabs-5">
       <button class="tab ${state.tab === "painel" ? "on" : ""}" data-tab="painel">Painel</button>
-      <button class="tab ${state.tab === "orcamento" ? "on" : ""}" data-tab="orcamento">Orçamento</button>
+      <button class="tab ${state.tab === "fluxo" ? "on" : ""}" data-tab="fluxo">Fluxo</button>
       <button class="tab ${state.tab === "despesas" ? "on" : ""}" data-tab="despesas">Despesas</button>
       <button class="tab ${state.tab === "receitas" ? "on" : ""}" data-tab="receitas">Receitas</button>
+      <button class="tab ${state.tab === "orcamento" ? "on" : ""}" data-tab="orcamento">Orç.</button>
     </nav>`;
+}
+
+function fluxoView() {
+  const rows = fluxoCaixa();
+  const today = todayISO();
+  const last = rows.length ? rows[rows.length - 1] : null;
+  const list = rows
+    .slice()
+    .reverse()
+    .map((r) => {
+      const mov = r.despesas || r.receitas;
+      const isToday = r.dia === today;
+      return `<div class="flux-row ${isToday ? "today" : ""} ${mov ? "mov" : ""}">
+        <div class="flux-head">
+          <b>${isoToBRShort(r.dia)}</b>
+          ${isToday ? '<span class="flux-tag">hoje</span>' : ""}
+        </div>
+        <div class="flux-grid">
+          <div><span>Inicial</span><b>${brl(r.saldoInicial)}</b></div>
+          <div><span>Saídas</span><b class="out">${r.despesas ? brl(r.despesas) : "—"}</b></div>
+          <div><span>Entradas</span><b class="in">${r.receitas ? brl(r.receitas) : "—"}</b></div>
+          <div><span>Final</span><b>${brl(r.saldoFinal)}</b></div>
+        </div>
+      </div>`;
+    })
+    .join("");
+  return `
+    <div class="scroll">
+      <div class="hello">Movimentação diária</div>
+      <div class="title">Fluxo de caixa</div>
+      <div class="hero flux-hero">
+        <div class="lbl">Saldo final ${last ? `(${isoToBRShort(last.dia)})` : ""}</div>
+        <div class="val">${brl(last?.saldoFinal || state.saldoInicial || 0)}</div>
+        <div class="sub">Saldo inicial do mês: ${brl(state.saldoInicial || 0)} (Config B12)</div>
+      </div>
+      <div class="section">Por dia (mais recente primeiro)</div>
+      ${list || `<p class="muted">Defina o mês em Config para ver o fluxo.</p>`}
+    </div>`;
 }
 
 function painelView(m) {
@@ -1082,6 +1160,7 @@ function appView() {
   const m = metrics();
   let body = "";
   if (state.tab === "painel") body = painelView(m);
+  if (state.tab === "fluxo") body = fluxoView();
   if (state.tab === "orcamento") body = orcamentoView(m);
   if (state.tab === "despesas") body = despesasView();
   if (state.tab === "receitas") body = receitasView();
