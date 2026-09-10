@@ -1,4 +1,4 @@
-const APP_VERSION = "15";
+const APP_VERSION = "16";
 const INSTALL_HINT_KEY = "financas-install-hint-v11";
 const KEY = "minhas-financas-config";
 const SCOPE =
@@ -167,9 +167,20 @@ function ym(iso) {
 function num(v) {
   if (v == null || v === "") return 0;
   if (typeof v === "number") return v;
-  const s = String(v).replace("R$", "").replace(/\s/g, "").replace(/\./g, "").replace(",", ".");
+  let s = String(v).replace("R$", "").replace(/\s/g, "").trim();
+  if (!s) return 0;
+  if (s.includes(",")) {
+    s = s.replace(/\./g, "").replace(",", ".");
+  }
   const n = Number(s);
   return Number.isFinite(n) ? n : 0;
+}
+
+function fmtMoneyInput(v) {
+  if (v == null || v === "") return "";
+  const n = typeof v === "number" ? v : num(v);
+  if (!Number.isFinite(n) || n === 0) return n === 0 ? "0,00" : "";
+  return n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function truthy(v) {
@@ -1098,8 +1109,8 @@ function openEdit(row, kind = "despesa") {
       descricao: d.descricao,
       fonte: d.categoria,
       vencimento: d.vencimento || todayISO(),
-      previsto: d.previsto ? String(d.previsto) : "",
-      realizado: d.realizado ? String(d.realizado) : "",
+      previsto: fmtMoneyInput(d.previsto),
+      realizado: fmtMoneyInput(d.realizado),
       conta: d.conta || "Nubank",
       observacoes: d.observacoes,
     };
@@ -1111,8 +1122,8 @@ function openEdit(row, kind = "despesa") {
       tipo: d.tipo || "Variável",
       vencimento: d.vencimento || todayISO(),
       prioridade: d.prioridade || "Média",
-      previsto: d.previsto ? String(d.previsto) : "",
-      realizado: d.realizado ? String(d.realizado) : "",
+      previsto: fmtMoneyInput(d.previsto),
+      realizado: fmtMoneyInput(d.realizado),
       pagamento: d.pagamento || "Pix",
       conta: d.conta || "Nubank",
       recorrente: d.recorrente || "Não",
