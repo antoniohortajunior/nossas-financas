@@ -1,4 +1,4 @@
-const APP_VERSION = "18";
+const APP_VERSION = "19";
 const INSTALL_HINT_KEY = "financas-install-hint-v11";
 const KEY = "minhas-financas-config";
 const SCOPE =
@@ -942,7 +942,6 @@ function despesasView() {
       <div class="item" data-row="${d.sheetRow}" data-kind="despesa" role="button" tabindex="0">
         <span class="check ${d.pago ? "yes" : ""}" data-toggle="${d.sheetRow}">${d.pago ? "✓" : ""}</span>
         <span class="mid"><b>${esc(d.descricao || "(sem descrição)")}</b><small>${despSubline(d)}</small></span>
-        <button type="button" class="item-del" data-delete-row="${d.sheetRow}" title="Excluir">🗑</button>
         <span class="right"><b>${brl(despValor(d))}</b><span class="pill ${pillClass(d.status)}">${esc(d.status || (d.pago ? "Pago" : "Pendente"))}</span></span>
       </div>`
     )
@@ -1049,11 +1048,15 @@ function sheetView() {
           <div class="field"><label>Parcela</label><input id="fParc" value="${esc(f.parcela)}" placeholder="Ex.: 3/12" /></div>
           <div class="field"><label>Observações</label><input id="fObs" value="${esc(f.observacoes)}" placeholder="Opcional" /></div>
         </div>`;
+  const editingDesp = !isRec && state.editingRow;
   return `
     <div class="sheet ${state.sheetOpen ? "open" : ""}" id="sheet">
       <div class="sheet-head">
         <h2>${state.editingRow ? (isRec ? "Editar receita" : "Editar despesa") : isRec ? "Nova receita" : "Nova despesa"}</h2>
-        <button class="ghost" id="closeSheet">×</button>
+        <div class="sheet-head-actions">
+          ${editingDesp ? `<button type="button" class="sheet-del" id="btnDeleteDesp" title="Excluir despesa">🗑</button>` : ""}
+          <button type="button" class="ghost" id="closeSheet">×</button>
+        </div>
       </div>
       <div class="sheet-body">${body}</div>
       <button class="save" id="saveBtn">${state.loading ? "Salvando…" : "Salvar na planilha"}</button>
@@ -1323,6 +1326,7 @@ async function deleteExpense(row) {
   const sheetId = await getDespesasSheetId();
   state.loading = true;
   state.deleteConfirm = null;
+  state.sheetOpen = false;
   render();
   try {
     await api(":batchUpdate", {
@@ -1446,7 +1450,7 @@ function bind() {
   );
   document.querySelectorAll(".item[data-row]").forEach((b) =>
     b.addEventListener("click", (e) => {
-      if (e.target.closest("[data-toggle]") || e.target.closest("[data-toggle-rec]") || e.target.closest(".item-del")) return;
+      if (e.target.closest("[data-toggle]") || e.target.closest("[data-toggle-rec]")) return;
       openEdit(Number(b.dataset.row), b.dataset.kind || "despesa");
     })
   );
@@ -1456,12 +1460,9 @@ function bind() {
   document.querySelectorAll("[data-toggle-rec]").forEach((b) =>
     b.addEventListener("click", (e) => togglePago(Number(b.dataset.toggleRec), e, "receita"))
   );
-  document.querySelectorAll("[data-delete-row]").forEach((b) =>
-    b.addEventListener("click", (e) => {
-      e.stopPropagation();
-      openDeleteConfirm(Number(b.dataset.deleteRow));
-    })
-  );
+  on("btnDeleteDesp", "click", () => {
+    if (state.editingRow) openDeleteConfirm(state.editingRow);
+  });
   on("deleteNo", "click", closeDeleteConfirm);
   on("deleteYes", "click", () => {
     if (state.deleteConfirm?.row) deleteExpense(state.deleteConfirm.row);
