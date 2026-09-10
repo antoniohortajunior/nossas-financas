@@ -1,4 +1,4 @@
-const APP_VERSION = "23";
+const APP_VERSION = "24";
 const INSTALL_HINT_KEY = "financas-install-hint-v11";
 const KEY = "minhas-financas-config";
 const SCOPE =
@@ -191,7 +191,24 @@ function fmtMoneyInput(v) {
 }
 
 function truthy(v) {
-  return v === true || v === "TRUE" || v === "VERDADEIRO" || v === "Sim" || v === "PAGO" || v === "RECEBIDO";
+  if (v === true || v === 1) return true;
+  if (v === false || v === 0 || v == null || v === "") return false;
+  const s = String(v).trim().toUpperCase();
+  if (s === "FALSE" || s === "FALSO" || s === "NÃO" || s === "NAO" || s === "NO") return false;
+  return s === "TRUE" || s === "VERDADEIRO" || s === "SIM" || s === "PAGO" || s === "RECEBIDO" || s === "✓" || s === "☑";
+}
+
+function receitaRecebida(r) {
+  return truthy(r.pago);
+}
+
+function valorReceitaRecebida(r) {
+  if (!receitaRecebida(r)) return 0;
+  return num(r.realizado) || 0;
+}
+
+function receitasRecebidasTotal() {
+  return monthReceitas().reduce((a, x) => a + valorReceitaRecebida(x), 0);
 }
 
 function colLetter(i) {
@@ -595,10 +612,7 @@ function classeGasto(partial) {
 
 function metrics() {
   const ds = monthDespesas();
-  const rs = monthReceitas();
-  const receitas = rs
-    .filter((x) => x.pago)
-    .reduce((a, x) => a + (x.realizado || x.previsto || 0), 0);
+  const receitas = receitasRecebidasTotal();
   const previsto = ds.reduce((a, x) => a + x.previsto, 0);
   const realizado = ds.reduce((a, x) => a + x.realizado, 0);
   const pagar = ds.filter((x) => !x.pago).reduce((a, x) => a + x.previsto, 0);
@@ -660,8 +674,8 @@ function fluxoCaixa() {
       .filter((x) => x.pago && despPgtoDate(x) === day)
       .reduce((a, x) => a + (x.realizado || x.previsto || 0), 0);
     const receitas = state.receitas
-      .filter((x) => x.pago && recRecebDate(x) === day)
-      .reduce((a, x) => a + (x.realizado || x.previsto || 0), 0);
+      .filter((x) => receitaRecebida(x) && recRecebDate(x) === day)
+      .reduce((a, x) => a + valorReceitaRecebida(x), 0);
     const saldoInicial = i === 0 ? saldo0 : prevFinal;
     const saldoFinal = saldoInicial - despesas + receitas;
     prevFinal = saldoFinal;
@@ -753,9 +767,7 @@ function receitasMetrics() {
   const rs = monthReceitas();
   return {
     previsto: rs.reduce((a, x) => a + x.previsto, 0),
-    realizado: rs
-      .filter((x) => x.pago)
-      .reduce((a, x) => a + (x.realizado || x.previsto || 0), 0),
+    realizado: receitasRecebidasTotal(),
     atrasadas: rs.filter((x) => String(x.status).toLowerCase().includes("atras")).length,
   };
 }
@@ -964,7 +976,7 @@ function painelView(m) {
         <div class="sub">receitas realizadas − despesas realizadas</div>
       </div>
       <div class="grid2">
-        <div class="kpi"><span>RECEITAS</span><b style="color:var(--emerald)">${brl(m.receitas)}</b></div>
+        <div class="kpi"><span>RECEITAS</span><b style="color:var(--emerald)">${brl(m.receitas)}</b><small style="display:block;font-size:10px;color:var(--muted);font-weight:600;margin-top:2px">só recebidas</small></div>
         <div class="kpi"><span>PREVISTO</span><b>${brl(m.previsto)}</b></div>
         <div class="kpi"><span>REALIZADO</span><b style="color:var(--rose)">${brl(m.realizado)}</b></div>
         <div class="kpi"><span>A PAGAR</span><b style="color:var(--violet)">${brl(m.pagar)}</b></div>
