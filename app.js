@@ -1,4 +1,4 @@
-const APP_VERSION = "16";
+const APP_VERSION = "18";
 const INSTALL_HINT_KEY = "financas-install-hint-v11";
 const KEY = "minhas-financas-config";
 const SCOPE =
@@ -39,6 +39,7 @@ const state = {
   toast: "",
   hint: "",
   booting: true,
+  deleteConfirm: null,
   form: blankForm(),
 };
 
@@ -64,7 +65,7 @@ function blankForm(kind = "despesa") {
     prioridade: "Média",
     previsto: "",
     realizado: "",
-    pagamento: "Pix",
+    dataPagamento: "",
     conta: "Nubank",
     recorrente: "Não",
     parcela: "",
@@ -159,6 +160,12 @@ function isoToBR(iso) {
   return `${d}/${m}/${y}`;
 }
 
+function isoToBRShort(iso) {
+  if (!iso || iso.length < 10) return "";
+  const [y, m, d] = iso.slice(0, 10).split("-");
+  return `${d}/${m}/${y.slice(-2)}`;
+}
+
 function ym(iso) {
   if (/^\d{4}-\d{2}/.test(iso || "")) return iso.slice(0, 7);
   return cellYM(iso);
@@ -215,7 +222,8 @@ function mapHeaders(row) {
     pct: ["%"],
     diferenca: ["diferença", "diferenca"],
     situacao: ["situação", "situacao"],
-    pagamento: ["pagamento", "pagamentos"],
+    dataPagamento: ["pagamento", "data pagamento", "data do pagamento", "data pago", "dt pagamento", "dt. pagamento"],
+    formaPagamento: ["forma pagamento", "forma de pagamento", "meio pagamento", "pagamentos"],
     conta: ["conta"],
     recorrente: ["recorrente"],
     parcela: ["parcela"],
@@ -458,7 +466,8 @@ function parseTables(batch) {
         realizado: num(r[idx.realizado]),
         pct: num(r[idx.pct]),
         situacao: String(r[idx.situacao] || ""),
-        pagamento: String(r[idx.pagamento] || ""),
+        dataPagamento: serialToISO(r[idx.dataPagamento]),
+        formaPagamento: String(r[idx.formaPagamento] || ""),
         conta: String(r[idx.conta] || ""),
         recorrente: String(r[idx.recorrente] || "Não"),
         parcela: String(r[idx.parcela] || ""),
@@ -618,6 +627,22 @@ function despValor(d) {
   return Number(d.pago ? d.realizado || d.previsto : d.previsto) || 0;
 }
 
+function despPgtoDate(d) {
+  if (!d.pago) return "";
+  return d.dataPagamento?.slice(0, 10) || "";
+}
+
+function despSubline(d) {
+  const parts = [];
+  if (d.vencimento) parts.push(`vence ${isoToBRShort(d.vencimento)}`);
+  if (d.pago) {
+    const pg = despPgtoDate(d);
+    if (pg) parts.push(`pgto ${isoToBRShort(pg)}`);
+  }
+  if (!parts.length && d.tipo) parts.push(esc(d.tipo));
+  return `${esc(d.categoria)}${parts.length ? " · " + parts.join(" · ") : ""}`;
+}
+
 function isValueQuery(q) {
   const t = String(q || "").trim();
   if (!t || !/\d/.test(t)) return false;
@@ -668,6 +693,15 @@ function sortedDespesas() {
 
   if (sortMode === "valor") {
     list.sort((a, b) => despValor(a) - despValor(b));
+  } else if (sortMode === "pgto") {
+    list.sort((a, b) => {
+      const va = despPgtoDate(a) || "";
+      const vb = despPgtoDate(b) || "";
+      if (!va && !vb) return 0;
+      if (!va) return 1;
+      if (!vb) return -1;
+      return vb.localeCompare(va);
+    });
   } else {
     list.sort((a, b) => {
       const va = a.vencimento?.slice(0, 10) || "";
@@ -905,11 +939,12 @@ function despesasView() {
   const list = sortedDespesas()
     .map(
       (d) => `
-      <button type="button" class="item" data-row="${d.sheetRow}" data-kind="despesa">
+      <div class="item" data-row="${d.sheetRow}" data-kind="despesa" role="button" tabindex="0">
         <span class="check ${d.pago ? "yes" : ""}" data-toggle="${d.sheetRow}">${d.pago ? "✓" : ""}</span>
-        <span class="mid"><b>${esc(d.descricao || "(sem descrição)")}</b><small>${esc(d.categoria)} · ${d.vencimento ? "vence " + isoToBR(d.vencimento) : d.tipo || ""}</small></span>
+        <span class="mid"><b>${esc(d.descricao || "(sem descrição)")}</b><small>${despSubline(d)}</small></span>
+        <button type="button" class="item-del" data-delete-row="${d.sheetRow}" title="Excluir">🗑</button>
         <span class="right"><b>${brl(despValor(d))}</b><span class="pill ${pillClass(d.status)}">${esc(d.status || (d.pago ? "Pago" : "Pendente"))}</span></span>
-      </button>`
+      </div>`
     )
     .join("");
   return `
@@ -919,6 +954,7 @@ function despesasView() {
         <div class="title">Despesas</div>
         <div class="sort-btns">
           <button type="button" class="sort-btn ${state.despSort === "vencimento" ? "on" : ""}" data-sort="vencimento">vencimento</button>
+          <button type="button" class="sort-btn ${state.despSort === "pgto" ? "on" : ""}" data-sort="pgto">Pgto</button>
           <button type="button" class="sort-btn ${state.despSort === "valor" ? "on" : ""}" data-sort="valor">valor</button>
         </div>
       </div>
@@ -997,6 +1033,9 @@ function sheetView() {
         <div class="field ${f.pago ? "" : "hidden"}" id="realizadoField">
           <label>Realizado</label><input id="fReal" inputmode="decimal" value="${esc(f.realizado)}" placeholder="0,00" />
         </div>
+        <div class="field ${f.pago ? "" : "hidden"}" id="pgtoField">
+          <label>Pagamento</label><input id="fPgto" type="date" value="${esc(f.dataPagamento || todayISO())}" />
+        </div>
         <button class="more" id="moreBtn">${state.moreOpen ? "Menos detalhes" : "Mais detalhes"}</button>
         <div class="${state.moreOpen ? "" : "hidden"}" id="extra">
           <div class="row2">
@@ -1004,13 +1043,10 @@ function sheetView() {
             <div class="field"><label>Prioridade</label><select id="fPrio">${options(L.prioridades, f.prioridade)}</select></div>
           </div>
           <div class="row2">
-            <div class="field"><label>Pagamento</label><select id="fPag">${options(L.pagamentos, f.pagamento)}</select></div>
             <div class="field"><label>Conta</label><select id="fConta">${options(L.contas, f.conta)}</select></div>
-          </div>
-          <div class="row2">
             <div class="field"><label>Recorrente</label><select id="fRec">${options(["Não", "Sim"], f.recorrente)}</select></div>
-            <div class="field"><label>Parcela</label><input id="fParc" value="${esc(f.parcela)}" placeholder="Ex.: 3/12" /></div>
           </div>
+          <div class="field"><label>Parcela</label><input id="fParc" value="${esc(f.parcela)}" placeholder="Ex.: 3/12" /></div>
           <div class="field"><label>Observações</label><input id="fObs" value="${esc(f.observacoes)}" placeholder="Opcional" /></div>
         </div>`;
   return `
@@ -1024,6 +1060,22 @@ function sheetView() {
     </div>`;
 }
 
+function confirmDeleteView() {
+  if (!state.deleteConfirm) return "";
+  const d = state.deleteConfirm;
+  return `
+    <div class="confirm-overlay" id="confirmDelete">
+      <div class="confirm-box">
+        <h3>Excluir lançamento?</h3>
+        <p>Deseja excluir <strong>${esc(d.descricao)}</strong>? Esta ação não pode ser desfeita.</p>
+        <div class="confirm-actions">
+          <button type="button" class="confirm-no" id="deleteNo">Não</button>
+          <button type="button" class="confirm-yes" id="deleteYes">Sim, excluir</button>
+        </div>
+      </div>
+    </div>`;
+}
+
 function appView() {
   const m = metrics();
   let body = "";
@@ -1031,7 +1083,7 @@ function appView() {
   if (state.tab === "orcamento") body = orcamentoView(m);
   if (state.tab === "despesas") body = despesasView();
   if (state.tab === "receitas") body = receitasView();
-  return `<div class="app ${state.loading ? "busy" : ""}">${body}${tabs()}${sheetView()}
+  return `<div class="app ${state.loading ? "busy" : ""}">${body}${tabs()}${sheetView()}${confirmDeleteView()}
     <div class="toast ${state.toast ? "show" : ""}">${esc(state.toast)}</div></div>`;
 }
 
@@ -1073,11 +1125,11 @@ function readFormFromDom() {
     state.form.conta = $("fConta").value;
     state.form.observacoes = $("fObs").value;
   }
+  if ($("fPgto")) state.form.dataPagamento = $("fPgto").value;
   if ($("fCat")) {
     state.form.categoria = $("fCat").value;
     state.form.tipo = $("fTipo").value;
     state.form.prioridade = $("fPrio").value;
-    state.form.pagamento = $("fPag").value;
     state.form.conta = $("fConta").value;
     state.form.recorrente = $("fRec").value;
     state.form.parcela = $("fParc").value;
@@ -1124,7 +1176,7 @@ function openEdit(row, kind = "despesa") {
       prioridade: d.prioridade || "Média",
       previsto: fmtMoneyInput(d.previsto),
       realizado: fmtMoneyInput(d.realizado),
-      pagamento: d.pagamento || "Pix",
+      dataPagamento: d.dataPagamento || "",
       conta: d.conta || "Nubank",
       recorrente: d.recorrente || "Não",
       parcela: d.parcela,
@@ -1181,12 +1233,14 @@ async function saveSheet() {
         prioridade: f.prioridade,
         previsto,
         realizado: f.pago ? realizado : realizado || "",
-        pagamento: f.pagamento,
         conta: f.conta,
         recorrente: f.recorrente,
         parcela: f.parcela,
         observacoes: f.observacoes,
       };
+  if (!isRec && idx.dataPagamento != null) {
+    writes.dataPagamento = f.pago ? isoToBR(f.dataPagamento || todayISO()) : "";
+  }
   const data = [];
   for (const [field, value] of Object.entries(writes)) {
     if (idx[field] == null) continue;
@@ -1220,22 +1274,80 @@ async function togglePago(row, ev, kind = "despesa") {
   const d = list.find((x) => x.sheetRow === row);
   if (!d || d.idx?.pago == null) return;
   const next = !d.pago;
+  const data = [{ range: `${sheet}!${colLetter(d.idx.pago)}${row}`, values: [[next]] }];
+  if (next && !d.realizado && d.previsto) {
+    data.push({ range: `${sheet}!${colLetter(d.idx.realizado)}${row}`, values: [[d.previsto]] });
+  }
+  if (kind === "despesa" && next && d.idx.dataPagamento != null) {
+    data.push({
+      range: `${sheet}!${colLetter(d.idx.dataPagamento)}${row}`,
+      values: [[isoToBR(todayISO())]],
+    });
+  }
+  if (kind === "despesa" && !next && d.idx.dataPagamento != null) {
+    data.push({ range: `${sheet}!${colLetter(d.idx.dataPagamento)}${row}`, values: [[""]] });
+  }
   try {
     await api("/values:batchUpdate?valueInputOption=USER_ENTERED", {
       method: "POST",
-      body: JSON.stringify({
-        valueInputOption: "USER_ENTERED",
-        data: [
-          { range: `${sheet}!${colLetter(d.idx.pago)}${row}`, values: [[next]] },
-          ...(next && !d.realizado && d.previsto
-            ? [{ range: `${sheet}!${colLetter(d.idx.realizado)}${row}`, values: [[d.previsto]] }]
-            : []),
-        ],
-      }),
+      body: JSON.stringify({ valueInputOption: "USER_ENTERED", data }),
     });
     await refresh();
   } catch (err) {
     showToast(err.message);
+  }
+}
+
+async function getDespesasSheetId() {
+  if (state._despSheetId != null) return state._despSheetId;
+  const data = await api("?fields=sheets(properties(sheetId,title))");
+  const sheet = (data.sheets || []).find((s) => s.properties?.title === "Despesas");
+  if (!sheet) throw new Error("Aba Despesas não encontrada na planilha.");
+  state._despSheetId = sheet.properties.sheetId;
+  return state._despSheetId;
+}
+
+function openDeleteConfirm(row) {
+  const d = state.despesas.find((x) => x.sheetRow === row);
+  if (!d) return;
+  state.deleteConfirm = { row, descricao: d.descricao || "(sem descrição)" };
+  render();
+}
+
+function closeDeleteConfirm() {
+  state.deleteConfirm = null;
+  render();
+}
+
+async function deleteExpense(row) {
+  const sheetId = await getDespesasSheetId();
+  state.loading = true;
+  state.deleteConfirm = null;
+  render();
+  try {
+    await api(":batchUpdate", {
+      method: "POST",
+      body: JSON.stringify({
+        requests: [
+          {
+            deleteDimension: {
+              range: {
+                sheetId,
+                dimension: "ROWS",
+                startIndex: row - 1,
+                endIndex: row,
+              },
+            },
+          },
+        ],
+      }),
+    });
+    showToast("Lançamento excluído.");
+    await refresh();
+  } catch (err) {
+    state.loading = false;
+    showToast(err.message);
+    render();
   }
 }
 
@@ -1290,6 +1402,7 @@ function bind() {
     b.addEventListener("click", () => {
       state.tab = b.dataset.tab;
       state.sheetOpen = false;
+      state.deleteConfirm = null;
       render();
     })
   );
@@ -1309,6 +1422,7 @@ function bind() {
     readFormFromDom();
     state.form.pago = !state.form.pago;
     if (state.form.pago && !state.form.realizado) state.form.realizado = state.form.previsto;
+    if (state.form.pago && !state.form.dataPagamento) state.form.dataPagamento = todayISO();
     render();
   });
   on("saveBtn", "click", saveSheet);
@@ -1332,7 +1446,7 @@ function bind() {
   );
   document.querySelectorAll(".item[data-row]").forEach((b) =>
     b.addEventListener("click", (e) => {
-      if (e.target.closest("[data-toggle]") || e.target.closest("[data-toggle-rec]")) return;
+      if (e.target.closest("[data-toggle]") || e.target.closest("[data-toggle-rec]") || e.target.closest(".item-del")) return;
       openEdit(Number(b.dataset.row), b.dataset.kind || "despesa");
     })
   );
@@ -1342,6 +1456,16 @@ function bind() {
   document.querySelectorAll("[data-toggle-rec]").forEach((b) =>
     b.addEventListener("click", (e) => togglePago(Number(b.dataset.toggleRec), e, "receita"))
   );
+  document.querySelectorAll("[data-delete-row]").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openDeleteConfirm(Number(b.dataset.deleteRow));
+    })
+  );
+  on("deleteNo", "click", closeDeleteConfirm);
+  on("deleteYes", "click", () => {
+    if (state.deleteConfirm?.row) deleteExpense(state.deleteConfirm.row);
+  });
 }
 
 async function boot() {
