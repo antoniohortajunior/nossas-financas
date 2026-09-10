@@ -1,4 +1,4 @@
-const APP_VERSION = "22";
+const APP_VERSION = "23";
 const INSTALL_HINT_KEY = "financas-install-hint-v11";
 const KEY = "minhas-financas-config";
 const SCOPE =
@@ -1133,10 +1133,10 @@ function sheetView() {
       <div class="sheet-confirm" id="confirmDelete">
         <div class="confirm-box">
           <h3>Excluir lançamento?</h3>
-          <p>Deseja excluir <strong>${esc(state.deleteConfirm.descricao)}</strong>? Esta ação não pode ser desfeita.</p>
+          <p>Deseja excluir <strong>${esc(state.deleteConfirm.descricao)}</strong>?</p>
           <div class="confirm-actions">
             <button type="button" class="confirm-no" id="deleteNo">Não</button>
-            <button type="button" class="confirm-yes" id="deleteYes">Sim, excluir</button>
+            <button type="button" class="confirm-yes" id="deleteYes">Sim</button>
           </div>
         </div>
       </div>`

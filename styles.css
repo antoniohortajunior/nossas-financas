@@ -196,7 +196,7 @@ body {
 .sheet-head-actions {
   display: flex;
   align-items: center;
-  gap: 28px;
+  gap: 20px;
   flex-shrink: 0;
   margin-left: 12px;
 }
@@ -205,6 +205,7 @@ body {
   background: #ffe4e6;
   width: 56px;
   height: 56px;
+  margin-right: 28px;
   border-radius: 16px;
   line-height: 1;
   display: grid;
@@ -362,17 +363,20 @@ body {
 }
 .confirm-box h3 { margin: 0; font-size: 18px; letter-spacing: -0.03em; }
 .confirm-box p { margin: 10px 0 0; font-size: 14px; line-height: 1.45; color: var(--muted); }
-.confirm-actions { display: flex; gap: 10px; margin-top: 18px; }
+.confirm-actions { display: flex; gap: 14px; margin-top: 24px; }
 .confirm-no,
 .confirm-yes {
   flex: 1;
   border: 0;
-  border-radius: 14px;
-  height: 44px;
+  border-radius: 18px;
+  min-height: 64px;
+  padding: 16px 12px;
   font-family: inherit;
-  font-size: 14px;
+  font-size: 20px;
   font-weight: 700;
   cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 .confirm-no { background: #e8eef3; color: var(--ink); }
 .confirm-yes { background: var(--rose); color: #fff; }
