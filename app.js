@@ -1,4 +1,4 @@
-const APP_VERSION = "29";
+const APP_VERSION = "30";
 const INSTALL_HINT_KEY = "financas-install-hint-v11";
 const KEY = "minhas-financas-config";
 const SCOPE =
@@ -431,8 +431,24 @@ function parseTables(batch) {
   const listas = byRange.Listas || [];
   const pickCol = (c, from = 1) =>
     listas.slice(from).map((r) => r[c]).filter((v) => v != null && String(v).trim() !== "");
+  let listaStart = 1;
+  for (let i = 0; i < listas.length; i++) {
+    const a = String(listas[i][0] || "").toLowerCase();
+    if (a.includes("categoria")) {
+      listaStart = i + 1;
+      break;
+    }
+  }
+  const classesPorCategoria = {};
+  for (let i = listaStart; i < listas.length; i++) {
+    const cat = String(listas[i][0] || "").trim();
+    const cls = String(listas[i][1] || "").trim();
+    if (!cat || cat.toLowerCase() === "categorias") continue;
+    if (cls) classesPorCategoria[cat] = cls;
+  }
   state.listas = {
     categorias: pickCol(0),
+    classesPorCategoria,
     tipos: pickCol(6).length ? pickCol(6) : ["Fixo", "Variável", "Parcelado", "Assinatura"],
     prioridades: pickCol(7).length ? pickCol(7) : ["Alta", "Média", "Baixa"],
     pagamentos: pickCol(8).length ? pickCol(8) : ["Pix", "Boleto", "Crédito", "Débito"],
@@ -452,11 +468,15 @@ function parseTables(batch) {
       const hasComp = joined.includes("competência") || joined.includes("competencia");
       const hasPrev = joined.includes("previsto");
       const hasFonte = joined.includes("fonte");
+      if (kind === "orcamento" && joined.includes("categoria") && joined.includes("limite")) {
+        headerRow = i;
+        break;
+      }
       if (kind === "receita" && (hasRecebido || hasComp) && (hasDesc || hasPrev || hasFonte)) {
         headerRow = i;
         break;
       }
-      if (kind !== "receita" && hasPago && (hasDesc || hasComp || hasPrev)) {
+      if (kind === "despesa" && hasPago && (hasDesc || hasComp || hasPrev)) {
         headerRow = i;
         break;
       }
@@ -472,7 +492,7 @@ function parseTables(batch) {
       const fonte = kind === "receita" ? String(r[idx.fonte] ?? r[idx.categoria] ?? r[2] ?? "") : "";
       const categoria = kind === "receita" ? fonte : String(r[idx.categoria] ?? (kind === "orcamento" ? r[1] : "") ?? "");
       if (kind !== "orcamento" && !descricao && !categoria && !fonte) continue;
-      if (kind === "orcamento" && !categoria) continue;
+      if (kind === "orcamento" && !isOrcamentoDataRow(categoria)) continue;
       if (kind === "despesa" && isSummaryRow(descricao, joined)) continue;
       const compRaw = idx.competencia != null ? r[idx.competencia] : "";
       rows.push({
@@ -610,7 +630,18 @@ function monthReceitas() {
   return state.receitas.filter((d) => inWorkMonth(d));
 }
 
+function isOrcamentoDataRow(categoria) {
+  const c = String(categoria || "").trim();
+  if (!c) return false;
+  const low = c.toLowerCase();
+  if (low === "categoria" || low === "categorias") return false;
+  if (c.toUpperCase() === "TOTAL") return false;
+  return true;
+}
+
 function categoriaClasse(cat) {
+  const fromListas = state.listas?.classesPorCategoria?.[cat];
+  if (fromListas) return fromListas;
   const o = state.orcamento.find((x) => x.categoria === cat);
   return String(o?.classe || "");
 }
@@ -639,7 +670,9 @@ function metrics() {
   const nec = classeGasto("necessidade");
   const des = classeGasto("desejo");
   const pou = classeGasto("poupan");
-  const limite = state.orcamento.reduce((a, x) => a + (x.limite || 0), 0);
+  const limite = state.orcamento
+    .filter((o) => isOrcamentoDataRow(o.categoria))
+    .reduce((a, x) => a + (x.limite || 0), 0);
   const saldo = receitas - realizado;
   const taxaPoupancaP = receitas ? (saldo / receitas) * 100 : 0;
   const metaPoupancaP = (Number(state.metaPoupanca) || 0.2) * 100;
@@ -993,8 +1026,8 @@ function tabs() {
 }
 
 function fluxoView() {
-  const rows = fluxoCaixa();
   const today = todayISO();
+  const rows = fluxoCaixa().filter((r) => r.dia <= today);
   const last = rows.length ? rows[rows.length - 1] : null;
   const consMap = Object.fromEntries((state.fluxoDias || []).map((x) => [x.dia, x.consolidado]));
   const list = rows
@@ -1025,8 +1058,8 @@ function fluxoView() {
       <div class="title">Fluxo de caixa</div>
       <div class="hero flux-hero">
         <div class="lbl">Saldo final ${last ? `(${isoToBRShort(last.dia)})` : ""}</div>
-        <div class="val">${brl(last?.saldoFinal || state.saldoInicial || 0)}</div>
-        <div class="sub">Saldo inicial do mês: ${brl(state.saldoInicial || 0)} (Config B12)</div>
+        <div class="val">${brl(last?.saldoFinal ?? state.saldoInicial ?? 0)}</div>
+        <div class="sub">Saldo inicial do mês: ${brl(state.saldoInicial || 0)} (Config B12) · exibindo até hoje</div>
         ${state.ultimaConsolidacao ? `<div class="sub">Consolidado até ${isoToBRShort(state.ultimaConsolidacao)} — lançamentos nessa data ou anteriores estão travados</div>` : ""}
       </div>
       <div class="section">Por dia (mais recente primeiro)</div>
@@ -1081,7 +1114,7 @@ function painelView(m) {
 
 function orcamentoView(m) {
   const rows = state.orcamento
-    .filter((o) => o.categoria)
+    .filter((o) => isOrcamentoDataRow(o.categoria))
     .map((o) => {
       const uso = o.limite ? o.realizado / o.limite : 0;
       const color = uso > 1 ? "var(--rose)" : uso >= 0.9 ? "var(--amber)" : "var(--teal)";
