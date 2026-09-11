@@ -58,6 +58,20 @@ body {
 }
 .kpi b { display: block; font-size: 15px; margin-top: 4px; }
 .kpi span { font-size: 11px; color: var(--muted); font-weight: 600; }
+.kpi-hint {
+  display: block;
+  font-size: 10px;
+  color: var(--muted);
+  font-weight: 600;
+  margin-top: 2px;
+  line-height: 1.25;
+}
+.kpi-sobrando {
+  background: linear-gradient(180deg, #ecfdf5 0%, #fff 100%);
+  border-color: #a7f3d0;
+}
+.kpi-sobrando span { color: #047857; }
+.kpi-sobrando b { color: var(--emerald); }
 .section { margin-top: 20px; font-size: 13px; font-weight: 700; }
 .bar-row { margin-top: 10px; }
 .bar-row .top { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 6px; }
@@ -113,6 +127,7 @@ body {
 }
 .flux-row.today { border-color: var(--teal); box-shadow: 0 0 0 1px var(--teal-soft); }
 .flux-row.mov { background: linear-gradient(180deg, #f0fdfa 0%, #fff 100%); }
+.flux-row.consolidado { opacity: 0.92; border-color: #cbd5e1; }
 .flux-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; }
 .flux-tag {
   font-size: 10px;
@@ -121,6 +136,10 @@ body {
   background: var(--teal-soft);
   padding: 2px 8px;
   border-radius: 999px;
+}
+.flux-tag.locked {
+  color: #64748b;
+  background: #f1f5f9;
 }
 .flux-grid {
   display: grid;

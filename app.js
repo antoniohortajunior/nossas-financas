@@ -1,4 +1,4 @@
-const APP_VERSION = "24";
+const APP_VERSION = "29";
 const INSTALL_HINT_KEY = "financas-install-hint-v11";
 const KEY = "minhas-financas-config";
 const SCOPE =
@@ -40,6 +40,8 @@ const state = {
   hint: "",
   booting: true,
   deleteConfirm: null,
+  fluxoDias: [],
+  ultimaConsolidacao: null,
   form: blankForm(),
 };
 
@@ -54,6 +56,7 @@ function blankForm(kind = "despesa") {
       realizado: "",
       conta: "Nubank",
       observacoes: "",
+      dataRecebimento: "",
     };
   }
   return {
@@ -253,6 +256,7 @@ function mapHeaders(row) {
   const idx = {};
   (row || []).forEach((h, i) => {
     const k = String(h || "").trim().toLowerCase();
+    if (k.includes("forma") && k.includes("pag")) return;
     for (const [field, names] of Object.entries(aliases)) {
       if (names.includes(k)) idx[field] = i;
     }
@@ -422,6 +426,7 @@ function parseTables(batch) {
   state.mesStart = serialToISO(cfg[5]?.[0]);
   state.mesEnd = serialToISO(cfg[6]?.[0]);
   state.saldoInicial = num(cfg[8]?.[0]);
+  state.metaPoupanca = num(cfg[9]?.[0]) || 0.2;
 
   const listas = byRange.Listas || [];
   const pickCol = (c, from = 1) =>
@@ -519,7 +524,7 @@ function enrichOrcamentoFromDespesas() {
     const cat = d.categoria || "Outros";
     if (!totals[cat]) totals[cat] = { previsto: 0, realizado: 0 };
     totals[cat].previsto += d.previsto;
-    totals[cat].realizado += d.pago ? (d.realizado || d.previsto) : d.realizado;
+    totals[cat].realizado += d.pago ? (num(d.realizado) || 0) : 0;
   });
   if (!Object.keys(totals).length) return;
   const seen = new Set(state.orcamento.map((o) => o.categoria));
@@ -561,7 +566,7 @@ async function refresh() {
   render();
   try {
     const data = await batchGetRanges([
-      "Config!B4:B12",
+      "Config!B4:B13",
       "Despesas!A1:T400",
       "Receitas!A1:L200",
       "Listas!A4:L20",
@@ -576,6 +581,13 @@ async function refresh() {
       } catch (_) {}
     }
     parseTables(data);
+    try {
+      const flux = await batchGetRanges(["Fluxo de caixa!A5:F35"]);
+      parseFluxoConsolidado(flux.valueRanges?.[0]?.values);
+    } catch {
+      state.fluxoDias = [];
+      state.ultimaConsolidacao = null;
+    }
     const monthCount = monthDespesas().length;
     if (!state.despesas.length) {
       state.hint = "Nenhuma linha na aba Despesas. A planilha precisa das abas Config, Despesas, Receitas e Listas (modelo Minhas Finanças).";
@@ -606,15 +618,21 @@ function categoriaClasse(cat) {
 function classeGasto(partial) {
   const key = partial.toLowerCase();
   return monthDespesas()
-    .filter((d) => categoriaClasse(d.categoria).toLowerCase().includes(key))
-    .reduce((a, x) => a + (x.pago ? (x.realizado || x.previsto) : x.realizado), 0);
+    .filter((d) => d.pago && categoriaClasse(d.categoria).toLowerCase().includes(key))
+    .reduce((a, x) => a + (num(x.realizado) || 0), 0);
+}
+
+function despesasPagasTotal() {
+  return monthDespesas()
+    .filter((d) => d.pago)
+    .reduce((a, x) => a + (num(x.realizado) || 0), 0);
 }
 
 function metrics() {
   const ds = monthDespesas();
   const receitas = receitasRecebidasTotal();
   const previsto = ds.reduce((a, x) => a + x.previsto, 0);
-  const realizado = ds.reduce((a, x) => a + x.realizado, 0);
+  const realizado = despesasPagasTotal();
   const pagar = ds.filter((x) => !x.pago).reduce((a, x) => a + x.previsto, 0);
   const atrasadas = ds.filter((x) => String(x.status).toLowerCase().includes("atras")).length;
   const breve = ds.filter((x) => String(x.status).toLowerCase().includes("breve")).length;
@@ -622,15 +640,22 @@ function metrics() {
   const des = classeGasto("desejo");
   const pou = classeGasto("poupan");
   const limite = state.orcamento.reduce((a, x) => a + (x.limite || 0), 0);
+  const saldo = receitas - realizado;
+  const taxaPoupancaP = receitas ? (saldo / receitas) * 100 : 0;
+  const metaPoupancaP = (Number(state.metaPoupanca) || 0.2) * 100;
   return {
     receitas,
     previsto,
     realizado,
-    saldo: receitas - realizado,
+    saldo,
     pagar,
+    sobrando: saldo - pagar,
+    economia: previsto - realizado,
     atrasadas,
     breve,
     uso: previsto ? realizado / previsto : 0,
+    taxaPoupancaP,
+    metaPoupancaP,
     nec,
     des,
     pou,
@@ -656,6 +681,46 @@ function recRecebDate(r) {
   return r.dataRecebimento?.slice(0, 10) || r.vencimento?.slice(0, 10) || "";
 }
 
+function parseFluxoConsolidado(values) {
+  state.fluxoDias = [];
+  for (let i = 0; i < (values || []).length; i++) {
+    const r = values[i] || [];
+    const dia = serialToISO(r[0]);
+    if (!dia) continue;
+    state.fluxoDias.push({ sheetRow: 5 + i, dia, consolidado: truthy(r[5]) });
+  }
+  state.fluxoDias.sort((a, b) => a.dia.localeCompare(b.dia));
+  state.ultimaConsolidacao = null;
+  for (const row of state.fluxoDias) {
+    if (!row.consolidado) break;
+    state.ultimaConsolidacao = row.dia;
+  }
+}
+
+function isDiaConsolidado(isoDate) {
+  const u = state.ultimaConsolidacao;
+  if (!u || !isoDate) return false;
+  return isoDate.slice(0, 10) <= u.slice(0, 10);
+}
+
+function validateDataMovimento(isoDate, label = "pagamento/recebimento") {
+  if (!isoDate) return `Informe a data de ${label}.`;
+  if (isDiaConsolidado(isoDate)) {
+    const ate = isoToBRShort(state.ultimaConsolidacao);
+    return `Este dia já foi consolidado (até ${ate}). Não é possível alterar.`;
+  }
+  return null;
+}
+
+function validatePagoRecebido(f, kind) {
+  if (!f.pago) return null;
+  if (kind === "receita") {
+    const dt = f.dataRecebimento || f.vencimento;
+    return validateDataMovimento(dt, "recebimento");
+  }
+  return validateDataMovimento(f.dataPagamento, "pagamento");
+}
+
 function fluxoCaixa() {
   const start = state.mesStart?.slice(0, 10);
   const end = state.mesEnd?.slice(0, 10);
@@ -672,7 +737,7 @@ function fluxoCaixa() {
   return days.map((day, i) => {
     const despesas = state.despesas
       .filter((x) => x.pago && despPgtoDate(x) === day)
-      .reduce((a, x) => a + (x.realizado || x.previsto || 0), 0);
+      .reduce((a, x) => a + (num(x.realizado) || 0), 0);
     const receitas = state.receitas
       .filter((x) => receitaRecebida(x) && recRecebDate(x) === day)
       .reduce((a, x) => a + valorReceitaRecebida(x), 0);
@@ -710,6 +775,15 @@ function parseQueryDate(q) {
   return `${y}-${String(Number(m[2])).padStart(2, "0")}-${String(Number(m[1])).padStart(2, "0")}`;
 }
 
+function compareDataValorDesc(va, vb, a, b) {
+  if (!va && !vb) return despValor(b) - despValor(a);
+  if (!va) return 1;
+  if (!vb) return -1;
+  const byDate = vb.localeCompare(va);
+  if (byDate !== 0) return byDate;
+  return despValor(b) - despValor(a);
+}
+
 function sortedDespesas() {
   let list = monthDespesas();
   if (state.filtro === "pagar") list = list.filter((d) => !d.pago);
@@ -743,22 +817,20 @@ function sortedDespesas() {
   }
 
   if (sortMode === "valor") {
-    list.sort((a, b) => despValor(a) - despValor(b));
+    list.sort((a, b) => despValor(b) - despValor(a));
   } else if (sortMode === "pgto") {
-    list.sort((a, b) => {
-      const va = despPgtoDate(a) || "";
-      const vb = despPgtoDate(b) || "";
-      if (!va && !vb) return 0;
-      if (!va) return 1;
-      if (!vb) return -1;
-      return vb.localeCompare(va);
-    });
+    list.sort((a, b) =>
+      compareDataValorDesc(despPgtoDate(a), despPgtoDate(b), a, b)
+    );
   } else {
-    list.sort((a, b) => {
-      const va = a.vencimento?.slice(0, 10) || "";
-      const vb = b.vencimento?.slice(0, 10) || "";
-      return vb.localeCompare(va);
-    });
+    list.sort((a, b) =>
+      compareDataValorDesc(
+        a.vencimento?.slice(0, 10) || "",
+        b.vencimento?.slice(0, 10) || "",
+        a,
+        b
+      )
+    );
   }
   return list;
 }
@@ -924,16 +996,19 @@ function fluxoView() {
   const rows = fluxoCaixa();
   const today = todayISO();
   const last = rows.length ? rows[rows.length - 1] : null;
+  const consMap = Object.fromEntries((state.fluxoDias || []).map((x) => [x.dia, x.consolidado]));
   const list = rows
     .slice()
     .reverse()
     .map((r) => {
       const mov = r.despesas || r.receitas;
       const isToday = r.dia === today;
-      return `<div class="flux-row ${isToday ? "today" : ""} ${mov ? "mov" : ""}">
+      const cons = consMap[r.dia];
+      return `<div class="flux-row ${isToday ? "today" : ""} ${mov ? "mov" : ""} ${cons ? "consolidado" : ""}">
         <div class="flux-head">
           <b>${isoToBRShort(r.dia)}</b>
           ${isToday ? '<span class="flux-tag">hoje</span>' : ""}
+          ${cons ? '<span class="flux-tag locked">consolidado</span>' : ""}
         </div>
         <div class="flux-grid">
           <div><span>Inicial</span><b>${brl(r.saldoInicial)}</b></div>
@@ -952,6 +1027,7 @@ function fluxoView() {
         <div class="lbl">Saldo final ${last ? `(${isoToBRShort(last.dia)})` : ""}</div>
         <div class="val">${brl(last?.saldoFinal || state.saldoInicial || 0)}</div>
         <div class="sub">Saldo inicial do mês: ${brl(state.saldoInicial || 0)} (Config B12)</div>
+        ${state.ultimaConsolidacao ? `<div class="sub">Consolidado até ${isoToBRShort(state.ultimaConsolidacao)} — lançamentos nessa data ou anteriores estão travados</div>` : ""}
       </div>
       <div class="section">Por dia (mais recente primeiro)</div>
       ${list || `<p class="muted">Defina o mês em Config para ver o fluxo.</p>`}
@@ -976,18 +1052,28 @@ function painelView(m) {
         <div class="sub">receitas realizadas − despesas realizadas</div>
       </div>
       <div class="grid2">
-        <div class="kpi"><span>RECEITAS</span><b style="color:var(--emerald)">${brl(m.receitas)}</b><small style="display:block;font-size:10px;color:var(--muted);font-weight:600;margin-top:2px">só recebidas</small></div>
-        <div class="kpi"><span>PREVISTO</span><b>${brl(m.previsto)}</b></div>
-        <div class="kpi"><span>REALIZADO</span><b style="color:var(--rose)">${brl(m.realizado)}</b></div>
-        <div class="kpi"><span>A PAGAR</span><b style="color:var(--violet)">${brl(m.pagar)}</b></div>
+        <div class="kpi"><span>RECEITAS</span><b style="color:var(--emerald)">${brl(m.receitas)}</b><small class="kpi-hint">só recebidas</small></div>
+        <div class="kpi"><span>PREVISTO</span><b>${brl(m.previsto)}</b><small class="kpi-hint">despesas no plano</small></div>
+        <div class="kpi"><span>REALIZADO</span><b style="color:var(--rose)">${brl(m.realizado)}</b><small class="kpi-hint">só pagas</small></div>
+        <div class="kpi"><span>A PAGAR AINDA</span><b style="color:var(--violet)">${brl(m.pagar)}</b><small class="kpi-hint">previsto em aberto</small></div>
+        <div class="kpi"><span>USO DO ORÇAMENTO</span><b>${m.previsto ? pct(m.uso * 100) : "—"}</b><small class="kpi-hint">realizado ÷ previsto</small></div>
+        <div class="kpi kpi-sobrando"><span>SOBRANDO</span><b>${brl(m.sobrando)}</b><small class="kpi-hint">saldo do mês − a pagar ainda</small></div>
+      </div>
+      <div class="section">Termômetro</div>
+      <div class="grid2">
+        <div class="kpi"><span>TAXA DE POUPANÇA</span><b>${pct(m.taxaPoupancaP)}</b></div>
+        <div class="kpi"><span>ECONOMIA VS. PREVISTO</span><b style="color:${m.economia >= 0 ? "var(--emerald)" : "var(--rose)"}">${brl(m.economia)}</b></div>
       </div>
       <div class="section">Regra 50-30-20</div>
       <div class="bar-row"><div class="top"><span>Necessidades</span><span>${pct(m.necP)}</span></div><div class="track"><div class="fill" style="width:${Math.min(m.necP, 100)}%;background:var(--teal)"></div></div></div>
       <div class="bar-row"><div class="top"><span>Desejos</span><span>${pct(m.desP)}</span></div><div class="track"><div class="fill" style="width:${Math.min(m.desP, 100)}%;background:var(--amber)"></div></div></div>
       <div class="bar-row"><div class="top"><span>Poupança</span><span>${pct(m.pouP)}</span></div><div class="track"><div class="fill" style="width:${Math.min(m.pouP, 100)}%;background:var(--emerald)"></div></div></div>
       <div class="section">Leituras</div>
-      <div class="alert"><span class="dot" style="background:${m.realizado <= m.previsto ? "var(--emerald)" : "var(--rose)"}"></span> ${m.realizado <= m.previsto ? "Despesas ainda dentro do previsto" : "Você já gastou mais do que o previsto"}</div>
-      <div class="alert"><span class="dot" style="background:${m.atrasadas ? "var(--rose)" : m.breve ? "var(--amber)" : "var(--emerald)"}"></span> ${m.atrasadas ? `${m.atrasadas} conta(s) atrasada(s)` : m.breve ? `${m.breve} conta(s) vencem em breve` : "Nenhuma conta atrasada"}</div>
+      <div class="alert"><span class="dot" style="background:${m.realizado <= m.previsto ? "var(--emerald)" : "var(--rose)"}"></span> ${m.realizado <= m.previsto ? "Despesas realizadas ainda dentro do previsto" : "Você já gastou mais do que o previsto neste mês"}</div>
+      <div class="alert"><span class="dot" style="background:${m.saldo >= 0 ? "var(--emerald)" : "var(--rose)"}"></span> ${m.saldo >= 0 ? "Há saldo positivo neste mês" : "O saldo do mês está negativo: a renda realizada não cobre os gastos"}</div>
+      <div class="alert"><span class="dot" style="background:${m.atrasadas ? "var(--rose)" : m.breve ? "var(--amber)" : "var(--emerald)"}"></span> ${m.atrasadas ? `${m.atrasadas} conta(s) atrasada(s)` : m.breve ? `${m.breve} conta(s) vencem em breve` : "Nenhuma conta atrasada no mês"}</div>
+      <div class="alert"><span class="dot" style="background:${m.uso > 1 ? "var(--rose)" : "var(--emerald)"}"></span> ${m.previsto ? (m.uso > 1 ? `O orçamento estourou (${pct(m.uso * 100)} do previsto)` : `Uso do orçamento em ${pct(m.uso * 100)}`) : "Sem despesas previstas no mês"}</div>
+      ${m.receitas > 0 ? `<div class="alert"><span class="dot" style="background:${m.taxaPoupancaP >= m.metaPoupancaP ? "var(--emerald)" : "var(--amber)"}"></span> ${m.taxaPoupancaP >= m.metaPoupancaP ? "Meta de poupança no caminho" : `A poupança está abaixo da meta de ${pct(m.metaPoupancaP)} da renda`}</div>` : ""}
       ${state.error ? `<p class="error">${esc(state.error)}</p>` : ""}
       ${state.hint ? `<div class="alert"><span class="dot" style="background:var(--amber)"></span> ${esc(state.hint)}</div>` : ""}
     </div>`;
@@ -1107,6 +1193,9 @@ function sheetView() {
         <div class="field ${f.pago ? "" : "hidden"}" id="realizadoField">
           <label>Realizado</label><input id="fReal" inputmode="decimal" value="${esc(f.realizado)}" placeholder="0,00" />
         </div>
+        <div class="field ${f.pago ? "" : "hidden"}" id="recbField">
+          <label>Recebimento</label><input id="fRecb" type="date" value="${esc(f.dataRecebimento || f.vencimento || "")}" />
+        </div>
         <div class="row2">
           <div class="field"><label>Conta</label><select id="fConta">${options(L.contas, f.conta)}</select></div>
           <div class="field"><label>Observações</label><input id="fObs" value="${esc(f.observacoes)}" placeholder="Opcional" /></div>
@@ -1123,7 +1212,7 @@ function sheetView() {
           <label>Realizado</label><input id="fReal" inputmode="decimal" value="${esc(f.realizado)}" placeholder="0,00" />
         </div>
         <div class="field ${f.pago ? "" : "hidden"}" id="pgtoField">
-          <label>Pagamento</label><input id="fPgto" type="date" value="${esc(f.dataPagamento || todayISO())}" />
+          <label>Pagamento</label><input id="fPgto" type="date" value="${esc(f.dataPagamento || "")}" />
         </div>
         <button class="more" id="moreBtn">${state.moreOpen ? "Menos detalhes" : "Mais detalhes"}</button>
         <div class="${state.moreOpen ? "" : "hidden"}" id="extra">
@@ -1219,6 +1308,7 @@ function readFormFromDom() {
     state.form.observacoes = $("fObs").value;
   }
   if ($("fPgto")) state.form.dataPagamento = $("fPgto").value;
+  if ($("fRecb")) state.form.dataRecebimento = $("fRecb").value;
   if ($("fCat")) {
     state.form.categoria = $("fCat").value;
     state.form.tipo = $("fTipo").value;
@@ -1256,6 +1346,7 @@ function openEdit(row, kind = "despesa") {
       vencimento: d.vencimento || todayISO(),
       previsto: fmtMoneyInput(d.previsto),
       realizado: fmtMoneyInput(d.realizado),
+      dataRecebimento: d.dataRecebimento || d.vencimento || "",
       conta: d.conta || "Nubank",
       observacoes: d.observacoes,
     };
@@ -1298,6 +1389,28 @@ async function saveSheet() {
     showToast(`Preencha a ${label}.`);
     return;
   }
+  const pagoErr = validatePagoRecebido(f, isRec ? "receita" : "despesa");
+  if (pagoErr) {
+    showToast(pagoErr);
+    return;
+  }
+  if (!isRec && f.dataPagamento && !f.pago) {
+    const err = validateDataMovimento(f.dataPagamento, "pagamento");
+    if (err) {
+      showToast(err);
+      return;
+    }
+  }
+  if (isRec) {
+    const dt = f.dataRecebimento || (f.pago ? f.vencimento : "");
+    if (dt) {
+      const err = validateDataMovimento(dt, "recebimento");
+      if (err) {
+        showToast(err);
+        return;
+      }
+    }
+  }
   const idx = (isRec ? state._recMeta : state._despMeta)?.idx || {};
   const sheet = isRec ? "Receitas" : "Despesas";
   const row = state.editingRow || firstEmptyRow(isRec ? state._recMeta : state._despMeta, isRec ? state.receitas : state.despesas);
@@ -1332,7 +1445,10 @@ async function saveSheet() {
         observacoes: f.observacoes,
       };
   if (!isRec && idx.dataPagamento != null) {
-    writes.dataPagamento = f.pago ? isoToBR(f.dataPagamento || todayISO()) : "";
+    writes.dataPagamento = f.pago ? isoToBR(f.dataPagamento) : "";
+  }
+  if (isRec && idx.dataRecebimento != null) {
+    writes.dataRecebimento = f.pago ? isoToBR(f.dataRecebimento || f.vencimento) : "";
   }
   const data = [];
   for (const [field, value] of Object.entries(writes)) {
@@ -1367,18 +1483,39 @@ async function togglePago(row, ev, kind = "despesa") {
   const d = list.find((x) => x.sheetRow === row);
   if (!d || d.idx?.pago == null) return;
   const next = !d.pago;
+  if (next) {
+    if (kind === "despesa") {
+      if (!d.dataPagamento) {
+        showToast("Informe a data de pagamento em Editar antes de marcar como pago.");
+        return;
+      }
+      const err = validateDataMovimento(d.dataPagamento, "pagamento");
+      if (err) {
+        showToast(err);
+        return;
+      }
+    } else {
+      const dt = d.dataRecebimento || d.vencimento;
+      if (!dt) {
+        showToast("Informe a data de recebimento em Editar antes de marcar como recebido.");
+        return;
+      }
+      const err = validateDataMovimento(dt, "recebimento");
+      if (err) {
+        showToast(err);
+        return;
+      }
+    }
+  }
   const data = [{ range: `${sheet}!${colLetter(d.idx.pago)}${row}`, values: [[next]] }];
   if (next && !d.realizado && d.previsto) {
     data.push({ range: `${sheet}!${colLetter(d.idx.realizado)}${row}`, values: [[d.previsto]] });
   }
-  if (kind === "despesa" && next && d.idx.dataPagamento != null) {
-    data.push({
-      range: `${sheet}!${colLetter(d.idx.dataPagamento)}${row}`,
-      values: [[isoToBR(todayISO())]],
-    });
-  }
   if (kind === "despesa" && !next && d.idx.dataPagamento != null) {
     data.push({ range: `${sheet}!${colLetter(d.idx.dataPagamento)}${row}`, values: [[""]] });
+  }
+  if (kind === "receita" && !next && d.idx.dataRecebimento != null) {
+    data.push({ range: `${sheet}!${colLetter(d.idx.dataRecebimento)}${row}`, values: [[""]] });
   }
   try {
     await api("/values:batchUpdate?valueInputOption=USER_ENTERED", {
@@ -1538,9 +1675,18 @@ function bind() {
   });
   on("pagoSwitch", "click", () => {
     readFormFromDom();
-    state.form.pago = !state.form.pago;
+    const next = !state.form.pago;
+    if (next) {
+      const kind = state.sheetKind === "receita" ? "receita" : "despesa";
+      const trial = { ...state.form, pago: true };
+      const err = validatePagoRecebido(trial, kind);
+      if (err) {
+        showToast(err);
+        return;
+      }
+    }
+    state.form.pago = next;
     if (state.form.pago && !state.form.realizado) state.form.realizado = state.form.previsto;
-    if (state.form.pago && !state.form.dataPagamento) state.form.dataPagamento = todayISO();
     render();
   });
   on("saveBtn", "click", saveSheet);
