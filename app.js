@@ -1,4 +1,4 @@
-const APP_VERSION = "30";
+const APP_VERSION = "31";
 const INSTALL_HINT_KEY = "financas-install-hint-v11";
 const KEY = "minhas-financas-config";
 const SCOPE =
@@ -258,7 +258,9 @@ function mapHeaders(row) {
     const k = String(h || "").trim().toLowerCase();
     if (k.includes("forma") && k.includes("pag")) return;
     for (const [field, names] of Object.entries(aliases)) {
-      if (names.includes(k)) idx[field] = i;
+      if (names.includes(k) || (field === "classe" && k.includes("classe"))) idx[field] = i;
+      else if (field === "limite" && (k.includes("limite") || k.includes("orçamento") || k.includes("orcamento")))
+        idx[field] = i;
     }
   });
   return idx;
@@ -407,6 +409,67 @@ function isSummaryRow(descricao, joined) {
   return j.includes("total geral") || j.includes("subtotal") || d.startsWith("total") || j.includes("soma ");
 }
 
+function normCat(s) {
+  return String(s || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function parseListasClasses(listas) {
+  const map = {};
+  let start = -1;
+  for (let i = 0; i < listas.length; i++) {
+    const row = listas[i] || [];
+    const joined = row.map((x) => String(x || "").toLowerCase()).join("|");
+    if (joined.includes("categoria") && (joined.includes("classe") || joined.includes("50-30") || joined.includes("503020"))) {
+      start = i + 1;
+      break;
+    }
+  }
+  if (start < 0) start = listas.length ? 1 : 0;
+  for (let i = start; i < listas.length; i++) {
+    const cat = String(listas[i][0] || "").trim();
+    const cls = String(listas[i][1] || "").trim();
+    if (!cat || !cls) continue;
+    const nk = normCat(cat);
+    const cl = cls.toLowerCase();
+    if (nk === "categoria" || nk === "categorias") continue;
+    if (cl.includes("classe") || cl.includes("50-30")) continue;
+    map[cat] = cls;
+    map[nk] = cls;
+  }
+  return map;
+}
+
+function lookupClasse(categoria) {
+  const c = String(categoria || "").trim();
+  if (!c) return "";
+  const map = state.listas?.classesPorCategoria || {};
+  return map[c] || map[normCat(c)] || "";
+}
+
+function classeMatches(classe, partial) {
+  const c = normCat(classe);
+  const p = normCat(partial);
+  if (p.startsWith("poupan")) return c.includes("poupan") || c.includes("invest");
+  if (p.startsWith("necess")) return c.includes("necess");
+  if (p.startsWith("desej")) return c.includes("desej");
+  return c.includes(p);
+}
+
+function orcamentoClasse(o) {
+  return String(o?.classe || lookupClasse(o?.categoria) || "").trim();
+}
+
+function hydrateOrcamentoClasses() {
+  state.orcamento = state.orcamento.map((o) => ({
+    ...o,
+    classe: orcamentoClasse(o),
+  }));
+}
+
 function parseTables(batch) {
   const byRange = {};
   (batch.valueRanges || []).forEach((vr) => {
@@ -431,21 +494,7 @@ function parseTables(batch) {
   const listas = byRange.Listas || [];
   const pickCol = (c, from = 1) =>
     listas.slice(from).map((r) => r[c]).filter((v) => v != null && String(v).trim() !== "");
-  let listaStart = 1;
-  for (let i = 0; i < listas.length; i++) {
-    const a = String(listas[i][0] || "").toLowerCase();
-    if (a.includes("categoria")) {
-      listaStart = i + 1;
-      break;
-    }
-  }
-  const classesPorCategoria = {};
-  for (let i = listaStart; i < listas.length; i++) {
-    const cat = String(listas[i][0] || "").trim();
-    const cls = String(listas[i][1] || "").trim();
-    if (!cat || cat.toLowerCase() === "categorias") continue;
-    if (cls) classesPorCategoria[cat] = cls;
-  }
+  const classesPorCategoria = parseListasClasses(listas);
   state.listas = {
     categorias: pickCol(0),
     classesPorCategoria,
@@ -468,7 +517,11 @@ function parseTables(batch) {
       const hasComp = joined.includes("competência") || joined.includes("competencia");
       const hasPrev = joined.includes("previsto");
       const hasFonte = joined.includes("fonte");
-      if (kind === "orcamento" && joined.includes("categoria") && joined.includes("limite")) {
+      if (
+        kind === "orcamento" &&
+        joined.includes("categoria") &&
+        (joined.includes("limite") || joined.includes("classe") || joined.includes("realizado"))
+      ) {
         headerRow = i;
         break;
       }
@@ -517,8 +570,8 @@ function parseTables(batch) {
         recorrente: String(r[idx.recorrente] || "Não"),
         parcela: String(r[idx.parcela] || ""),
         observacoes: String(r[idx.observacoes] || ""),
-        classe: String(r[idx.classe] || ""),
-        limite: num(r[idx.limite] ?? r[3]),
+        classe: kind === "orcamento" ? String(r[idx.classe] ?? r[2] ?? "").trim() : String(r[idx.classe] || ""),
+        limite: num(r[idx.limite] ?? (kind === "orcamento" ? r[3] : undefined)),
         restante: num(r[idx.restante]),
         idx,
       });
@@ -534,7 +587,9 @@ function parseTables(batch) {
   state.despesas = d.rows;
   state.receitas = rec.rows;
   state.orcamento = orc.rows;
+  hydrateOrcamentoClasses();
   enrichOrcamentoFromDespesas();
+  hydrateOrcamentoClasses();
 }
 
 function enrichOrcamentoFromDespesas() {
@@ -565,6 +620,7 @@ function enrichOrcamentoFromDespesas() {
     state.orcamento.push({
       sheetRow: 0,
       categoria,
+      classe: lookupClasse(categoria),
       limite: 0,
       previsto: t.previsto,
       realizado: t.realizado,
@@ -589,7 +645,7 @@ async function refresh() {
       "Config!B4:B13",
       "Despesas!A1:T400",
       "Receitas!A1:L200",
-      "Listas!A4:L20",
+      "Listas!A4:L50",
     ]);
     try {
       const orc = await batchGetRanges(["Orçamento!A1:J30"]);
@@ -640,16 +696,25 @@ function isOrcamentoDataRow(categoria) {
 }
 
 function categoriaClasse(cat) {
-  const fromListas = state.listas?.classesPorCategoria?.[cat];
+  const fromListas = lookupClasse(cat);
   if (fromListas) return fromListas;
-  const o = state.orcamento.find((x) => x.categoria === cat);
-  return String(o?.classe || "");
+  const nk = normCat(cat);
+  const o = state.orcamento.find((x) => normCat(x.categoria) === nk);
+  return orcamentoClasse(o);
 }
 
-function classeGasto(partial) {
-  const key = partial.toLowerCase();
+/** Igual ao Painel da planilha: soma Realizado do Orçamento por classe; fallback nas despesas pagas. */
+function gastoPorClasse503020(partial) {
+  let fromOrc = 0;
+  for (const o of state.orcamento) {
+    if (!isOrcamentoDataRow(o.categoria)) continue;
+    const cls = orcamentoClasse(o);
+    if (!classeMatches(cls, partial)) continue;
+    fromOrc += num(o.realizado) || 0;
+  }
+  if (fromOrc > 0) return fromOrc;
   return monthDespesas()
-    .filter((d) => d.pago && categoriaClasse(d.categoria).toLowerCase().includes(key))
+    .filter((d) => d.pago && classeMatches(categoriaClasse(d.categoria), partial))
     .reduce((a, x) => a + (num(x.realizado) || 0), 0);
 }
 
@@ -667,9 +732,9 @@ function metrics() {
   const pagar = ds.filter((x) => !x.pago).reduce((a, x) => a + x.previsto, 0);
   const atrasadas = ds.filter((x) => String(x.status).toLowerCase().includes("atras")).length;
   const breve = ds.filter((x) => String(x.status).toLowerCase().includes("breve")).length;
-  const nec = classeGasto("necessidade");
-  const des = classeGasto("desejo");
-  const pou = classeGasto("poupan");
+  const nec = gastoPorClasse503020("necessidade");
+  const des = gastoPorClasse503020("desejo");
+  const pou = gastoPorClasse503020("poupan");
   const limite = state.orcamento
     .filter((o) => isOrcamentoDataRow(o.categoria))
     .reduce((a, x) => a + (x.limite || 0), 0);
@@ -1098,9 +1163,10 @@ function painelView(m) {
         <div class="kpi"><span>ECONOMIA VS. PREVISTO</span><b style="color:${m.economia >= 0 ? "var(--emerald)" : "var(--rose)"}">${brl(m.economia)}</b></div>
       </div>
       <div class="section">Regra 50-30-20</div>
-      <div class="bar-row"><div class="top"><span>Necessidades</span><span>${pct(m.necP)}</span></div><div class="track"><div class="fill" style="width:${Math.min(m.necP, 100)}%;background:var(--teal)"></div></div></div>
-      <div class="bar-row"><div class="top"><span>Desejos</span><span>${pct(m.desP)}</span></div><div class="track"><div class="fill" style="width:${Math.min(m.desP, 100)}%;background:var(--amber)"></div></div></div>
-      <div class="bar-row"><div class="top"><span>Poupança</span><span>${pct(m.pouP)}</span></div><div class="track"><div class="fill" style="width:${Math.min(m.pouP, 100)}%;background:var(--emerald)"></div></div></div>
+      <div class="bar-row"><div class="top"><span>Necessidades (meta 50%)</span><span>${brl(m.nec)} · ${pct(m.necP)}</span></div><div class="track"><div class="fill" style="width:${Math.min(m.necP, 100)}%;background:var(--teal)"></div></div></div>
+      <div class="bar-row"><div class="top"><span>Desejos (meta 30%)</span><span>${brl(m.des)} · ${pct(m.desP)}</span></div><div class="track"><div class="fill" style="width:${Math.min(m.desP, 100)}%;background:var(--amber)"></div></div></div>
+      <div class="bar-row"><div class="top"><span>Poupança (meta 20%)</span><span>${brl(m.pou)} · ${pct(m.pouP)}</span></div><div class="track"><div class="fill" style="width:${Math.min(m.pouP, 100)}%;background:var(--emerald)"></div></div></div>
+      ${m.receitas === 0 ? `<p class="muted" style="margin-top:8px;font-size:12px">Os % usam receitas recebidas no mês. Marque Recebido? nas receitas para calcular.</p>` : ""}
       <div class="section">Leituras</div>
       <div class="alert"><span class="dot" style="background:${m.realizado <= m.previsto ? "var(--emerald)" : "var(--rose)"}"></span> ${m.realizado <= m.previsto ? "Despesas realizadas ainda dentro do previsto" : "Você já gastou mais do que o previsto neste mês"}</div>
       <div class="alert"><span class="dot" style="background:${m.saldo >= 0 ? "var(--emerald)" : "var(--rose)"}"></span> ${m.saldo >= 0 ? "Há saldo positivo neste mês" : "O saldo do mês está negativo: a renda realizada não cobre os gastos"}</div>
