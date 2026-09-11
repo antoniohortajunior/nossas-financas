@@ -1,4 +1,4 @@
-const APP_VERSION = "31";
+const APP_VERSION = "32";
 const INSTALL_HINT_KEY = "financas-install-hint-v11";
 const KEY = "minhas-financas-config";
 const SCOPE =
@@ -259,7 +259,11 @@ function mapHeaders(row) {
     if (k.includes("forma") && k.includes("pag")) return;
     for (const [field, names] of Object.entries(aliases)) {
       if (names.includes(k) || (field === "classe" && k.includes("classe"))) idx[field] = i;
-      else if (field === "limite" && (k.includes("limite") || k.includes("orçamento") || k.includes("orcamento")))
+      else if (
+        field === "limite" &&
+        !k.includes("%") &&
+        (k === "limite" || k.includes("orçamento mensal") || k.includes("orcamento mensal"))
+      )
         idx[field] = i;
     }
   });
@@ -417,30 +421,39 @@ function normCat(s) {
     .replace(/[\u0300-\u036f]/g, "");
 }
 
-function parseListasClasses(listas) {
-  const map = {};
-  let start = -1;
+function listasCatalogStart(listas) {
   for (let i = 0; i < listas.length; i++) {
     const row = listas[i] || [];
     const joined = row.map((x) => String(x || "").toLowerCase()).join("|");
     if (joined.includes("categoria") && (joined.includes("classe") || joined.includes("50-30") || joined.includes("503020"))) {
-      start = i + 1;
-      break;
+      return i + 1;
     }
   }
-  if (start < 0) start = listas.length ? 1 : 0;
+  return listas.length ? 1 : 0;
+}
+
+function parseListasCatalog(listas) {
+  const classes = {};
+  const limites = {};
+  const start = listasCatalogStart(listas);
   for (let i = start; i < listas.length; i++) {
     const cat = String(listas[i][0] || "").trim();
     const cls = String(listas[i][1] || "").trim();
-    if (!cat || !cls) continue;
+    if (!cat) continue;
     const nk = normCat(cat);
-    const cl = cls.toLowerCase();
     if (nk === "categoria" || nk === "categorias") continue;
-    if (cl.includes("classe") || cl.includes("50-30")) continue;
-    map[cat] = cls;
-    map[nk] = cls;
+    const cl = cls.toLowerCase();
+    if (cls && !cl.includes("classe") && !cl.includes("50-30")) {
+      classes[cat] = cls;
+      classes[nk] = cls;
+    }
+    if (listas[i][3] != null && String(listas[i][3]).trim() !== "") {
+      const lim = num(listas[i][3]);
+      limites[cat] = lim;
+      limites[nk] = lim;
+    }
   }
-  return map;
+  return { classes, limites };
 }
 
 function lookupClasse(categoria) {
@@ -463,10 +476,18 @@ function orcamentoClasse(o) {
   return String(o?.classe || lookupClasse(o?.categoria) || "").trim();
 }
 
-function hydrateOrcamentoClasses() {
+function lookupLimite(categoria) {
+  const c = String(categoria || "").trim();
+  if (!c) return 0;
+  const map = state.listas?.limitesPorCategoria || {};
+  return num(map[c] ?? map[normCat(c)] ?? 0);
+}
+
+function hydrateOrcamentoMeta() {
   state.orcamento = state.orcamento.map((o) => ({
     ...o,
     classe: orcamentoClasse(o),
+    limite: num(o.limite) || lookupLimite(o.categoria),
   }));
 }
 
@@ -494,10 +515,11 @@ function parseTables(batch) {
   const listas = byRange.Listas || [];
   const pickCol = (c, from = 1) =>
     listas.slice(from).map((r) => r[c]).filter((v) => v != null && String(v).trim() !== "");
-  const classesPorCategoria = parseListasClasses(listas);
+  const catalog = parseListasCatalog(listas);
   state.listas = {
     categorias: pickCol(0),
-    classesPorCategoria,
+    classesPorCategoria: catalog.classes,
+    limitesPorCategoria: catalog.limites,
     tipos: pickCol(6).length ? pickCol(6) : ["Fixo", "Variável", "Parcelado", "Assinatura"],
     prioridades: pickCol(7).length ? pickCol(7) : ["Alta", "Média", "Baixa"],
     pagamentos: pickCol(8).length ? pickCol(8) : ["Pix", "Boleto", "Crédito", "Débito"],
@@ -571,7 +593,7 @@ function parseTables(batch) {
         parcela: String(r[idx.parcela] || ""),
         observacoes: String(r[idx.observacoes] || ""),
         classe: kind === "orcamento" ? String(r[idx.classe] ?? r[2] ?? "").trim() : String(r[idx.classe] || ""),
-        limite: num(r[idx.limite] ?? (kind === "orcamento" ? r[3] : undefined)),
+        limite: kind === "orcamento" ? num(r[3] ?? r[idx.limite]) : num(r[idx.limite]),
         restante: num(r[idx.restante]),
         idx,
       });
@@ -587,9 +609,9 @@ function parseTables(batch) {
   state.despesas = d.rows;
   state.receitas = rec.rows;
   state.orcamento = orc.rows;
-  hydrateOrcamentoClasses();
+  hydrateOrcamentoMeta();
   enrichOrcamentoFromDespesas();
-  hydrateOrcamentoClasses();
+  hydrateOrcamentoMeta();
 }
 
 function enrichOrcamentoFromDespesas() {
@@ -621,7 +643,7 @@ function enrichOrcamentoFromDespesas() {
       sheetRow: 0,
       categoria,
       classe: lookupClasse(categoria),
-      limite: 0,
+      limite: lookupLimite(categoria),
       previsto: t.previsto,
       realizado: t.realizado,
       situacao: "sem limite",
@@ -659,9 +681,10 @@ async function refresh() {
     parseTables(data);
     try {
       const flux = await batchGetRanges(["Fluxo de caixa!A5:F35"]);
-      parseFluxoConsolidado(flux.valueRanges?.[0]?.values);
+      parseFluxoSheet(flux.valueRanges?.[0]?.values);
     } catch {
       state.fluxoDias = [];
+      state.fluxoFromSheet = false;
       state.ultimaConsolidacao = null;
     }
     const monthCount = monthDespesas().length;
@@ -779,15 +802,26 @@ function recRecebDate(r) {
   return r.dataRecebimento?.slice(0, 10) || r.vencimento?.slice(0, 10) || "";
 }
 
-function parseFluxoConsolidado(values) {
+function parseFluxoSheet(values) {
   state.fluxoDias = [];
+  state.fluxoFromSheet = false;
   for (let i = 0; i < (values || []).length; i++) {
     const r = values[i] || [];
     const dia = serialToISO(r[0]);
     if (!dia) continue;
-    state.fluxoDias.push({ sheetRow: 5 + i, dia, consolidado: truthy(r[5]) });
+    const hasSaldo = r[4] != null && String(r[4]).trim() !== "";
+    state.fluxoDias.push({
+      sheetRow: 5 + i,
+      dia,
+      saldoInicial: r[1] != null && String(r[1]).trim() !== "" ? num(r[1]) : null,
+      despesas: r[2] != null && String(r[2]).trim() !== "" ? num(r[2]) : 0,
+      receitas: r[3] != null && String(r[3]).trim() !== "" ? num(r[3]) : 0,
+      saldoFinal: hasSaldo ? num(r[4]) : null,
+      consolidado: truthy(r[5]),
+    });
   }
   state.fluxoDias.sort((a, b) => a.dia.localeCompare(b.dia));
+  state.fluxoFromSheet = state.fluxoDias.some((x) => x.saldoFinal != null);
   state.ultimaConsolidacao = null;
   for (const row of state.fluxoDias) {
     if (!row.consolidado) break;
@@ -819,7 +853,13 @@ function validatePagoRecebido(f, kind) {
   return validateDataMovimento(f.dataPagamento, "pagamento");
 }
 
-function fluxoCaixa() {
+/** Data da receita no fluxo — igual à planilha: Data prevista (col E). */
+function fluxoRecDate(r) {
+  if (!receitaRecebida(r)) return "";
+  return r.vencimento?.slice(0, 10) || r.dataRecebimento?.slice(0, 10) || "";
+}
+
+function fluxoCaixaComputed() {
   const start = state.mesStart?.slice(0, 10);
   const end = state.mesEnd?.slice(0, 10);
   if (!start || !end) return [];
@@ -828,7 +868,10 @@ function fluxoCaixa() {
   let d = new Date(`${start}T12:00:00`);
   const endD = new Date(`${end}T12:00:00`);
   while (d <= endD) {
-    days.push(d.toISOString().slice(0, 10));
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    days.push(`${y}-${m}-${dd}`);
     d.setDate(d.getDate() + 1);
   }
   let prevFinal = saldo0;
@@ -837,13 +880,29 @@ function fluxoCaixa() {
       .filter((x) => x.pago && despPgtoDate(x) === day)
       .reduce((a, x) => a + (num(x.realizado) || 0), 0);
     const receitas = state.receitas
-      .filter((x) => receitaRecebida(x) && recRecebDate(x) === day)
+      .filter((x) => receitaRecebida(x) && fluxoRecDate(x) === day)
       .reduce((a, x) => a + valorReceitaRecebida(x), 0);
     const saldoInicial = i === 0 ? saldo0 : prevFinal;
     const saldoFinal = saldoInicial - despesas + receitas;
     prevFinal = saldoFinal;
     return { dia: day, saldoInicial, despesas, receitas, saldoFinal };
   });
+}
+
+function fluxoRows() {
+  const today = todayISO();
+  if (state.fluxoFromSheet && state.fluxoDias.length) {
+    return state.fluxoDias
+      .filter((r) => r.dia <= today && r.saldoFinal != null)
+      .map((r) => ({
+        dia: r.dia,
+        saldoInicial: num(r.saldoInicial ?? state.saldoInicial),
+        despesas: num(r.despesas) || 0,
+        receitas: num(r.receitas) || 0,
+        saldoFinal: num(r.saldoFinal),
+      }));
+  }
+  return fluxoCaixaComputed().filter((r) => r.dia <= today);
 }
 
 function despSubline(d) {
@@ -1092,7 +1151,7 @@ function tabs() {
 
 function fluxoView() {
   const today = todayISO();
-  const rows = fluxoCaixa().filter((r) => r.dia <= today);
+  const rows = fluxoRows();
   const last = rows.length ? rows[rows.length - 1] : null;
   const consMap = Object.fromEntries((state.fluxoDias || []).map((x) => [x.dia, x.consolidado]));
   const list = rows
@@ -1137,7 +1196,7 @@ function painelView(m) {
     <div class="scroll">
       ${renderInstallHint()}
       <div class="topbar">
-        <div class="hello">Olá, ${esc(state.nome)}</div>
+        <div class="hello">Olá, ${esc(state.nome)} <span class="app-ver">v${APP_VERSION}</span></div>
         <div class="topbar-actions">
           ${renderFullscreenBarBtn()}
           <button class="linkish" id="btnReload">${state.loading ? "Atualizando…" : "Atualizar"}</button>
