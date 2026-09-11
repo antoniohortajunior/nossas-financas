@@ -1,4 +1,4 @@
-const APP_VERSION = "32";
+const APP_VERSION = "33";
 const INSTALL_HINT_KEY = "financas-install-hint-v11";
 const KEY = "minhas-financas-config";
 const SCOPE =
@@ -572,20 +572,20 @@ function parseTables(batch) {
       const compRaw = idx.competencia != null ? r[idx.competencia] : "";
       rows.push({
         sheetRow: i + 1,
-        pago: truthy(r[idx.pago]),
+        pago: truthy(kind === "despesa" ? (r[idx.pago] ?? r[0]) : r[idx.pago]),
         competenciaRaw: compRaw,
         competencia: serialToISO(compRaw),
         categoria: categoria || fonte,
         descricao,
         tipo: String(r[idx.tipo] || ""),
-        vencimento: serialToISO(r[idx.vencimento]),
+        vencimento: serialToISO(kind === "despesa" ? (r[idx.vencimento] ?? r[5]) : r[idx.vencimento]),
         prioridade: String(r[idx.prioridade] || ""),
         status: String(r[idx.status] || ""),
-        previsto: num(r[idx.previsto]),
-        realizado: num(r[idx.realizado]),
+        previsto: num(kind === "despesa" ? (r[idx.previsto] ?? r[10]) : r[idx.previsto]),
+        realizado: num(kind === "despesa" ? (r[idx.realizado] ?? r[11]) : r[idx.realizado]),
         pct: num(r[idx.pct]),
         situacao: String(r[idx.situacao] || ""),
-        dataPagamento: serialToISO(r[idx.dataPagamento]),
+        dataPagamento: serialToISO(kind === "despesa" ? (r[idx.dataPagamento] ?? r[6]) : r[idx.dataPagamento]),
         dataRecebimento: serialToISO(r[idx.dataRecebimento]),
         formaPagamento: String(r[idx.formaPagamento] || ""),
         conta: String(r[idx.conta] || ""),
@@ -652,9 +652,36 @@ function enrichOrcamentoFromDespesas() {
   }
 }
 
-async function batchGetRanges(ranges) {
+async function batchGetRanges(ranges, render = "FORMATTED_VALUE") {
   const q = ranges.map((r) => `ranges=${encodeURIComponent(r)}`).join("&");
-  return api(`/values:batchGet?${q}&valueRenderOption=FORMATTED_VALUE`);
+  return api(`/values:batchGet?${q}&valueRenderOption=${render}`);
+}
+
+/** Lê Fluxo coluna a coluna — evita deslocar C/D quando células vazias são omitidas pela API. */
+async function loadFluxoSheet() {
+  const ranges = [
+    "Fluxo de caixa!A5:A35",
+    "Fluxo de caixa!B5:B35",
+    "Fluxo de caixa!C5:C35",
+    "Fluxo de caixa!D5:D35",
+    "Fluxo de caixa!E5:E35",
+    "Fluxo de caixa!F5:F35",
+  ];
+  const data = await batchGetRanges(ranges);
+  const cols = (data.valueRanges || []).map((vr) => vr.values || []);
+  const maxLen = Math.max(0, ...cols.map((c) => c.length));
+  const rows = [];
+  for (let i = 0; i < maxLen; i++) {
+    rows.push([
+      cols[0][i]?.[0],
+      cols[1][i]?.[0],
+      cols[2][i]?.[0],
+      cols[3][i]?.[0],
+      cols[4][i]?.[0],
+      cols[5][i]?.[0],
+    ]);
+  }
+  parseFluxoSheet(rows);
 }
 
 async function refresh() {
@@ -680,8 +707,7 @@ async function refresh() {
     }
     parseTables(data);
     try {
-      const flux = await batchGetRanges(["Fluxo de caixa!A5:F35"]);
-      parseFluxoSheet(flux.valueRanges?.[0]?.values);
+      await loadFluxoSheet();
     } catch {
       state.fluxoDias = [];
       state.fluxoFromSheet = false;
@@ -802,6 +828,11 @@ function recRecebDate(r) {
   return r.dataRecebimento?.slice(0, 10) || r.vencimento?.slice(0, 10) || "";
 }
 
+function fluxoCellNum(v) {
+  if (v == null || String(v).trim() === "") return null;
+  return num(v);
+}
+
 function parseFluxoSheet(values) {
   state.fluxoDias = [];
   state.fluxoFromSheet = false;
@@ -809,14 +840,14 @@ function parseFluxoSheet(values) {
     const r = values[i] || [];
     const dia = serialToISO(r[0]);
     if (!dia) continue;
-    const hasSaldo = r[4] != null && String(r[4]).trim() !== "";
+    const saldoFinal = fluxoCellNum(r[4]);
     state.fluxoDias.push({
       sheetRow: 5 + i,
       dia,
-      saldoInicial: r[1] != null && String(r[1]).trim() !== "" ? num(r[1]) : null,
-      despesas: r[2] != null && String(r[2]).trim() !== "" ? num(r[2]) : 0,
-      receitas: r[3] != null && String(r[3]).trim() !== "" ? num(r[3]) : 0,
-      saldoFinal: hasSaldo ? num(r[4]) : null,
+      saldoInicial: fluxoCellNum(r[1]),
+      despesas: fluxoCellNum(r[2]),
+      receitas: fluxoCellNum(r[3]),
+      saldoFinal,
       consolidado: truthy(r[5]),
     });
   }
@@ -891,18 +922,22 @@ function fluxoCaixaComputed() {
 
 function fluxoRows() {
   const today = todayISO();
+  const computed = fluxoCaixaComputed();
+  const compMap = Object.fromEntries(computed.map((r) => [r.dia, r]));
+
   if (state.fluxoFromSheet && state.fluxoDias.length) {
     return state.fluxoDias
       .filter((r) => r.dia <= today && r.saldoFinal != null)
-      .map((r) => ({
-        dia: r.dia,
-        saldoInicial: num(r.saldoInicial ?? state.saldoInicial),
-        despesas: num(r.despesas) || 0,
-        receitas: num(r.receitas) || 0,
-        saldoFinal: num(r.saldoFinal),
-      }));
+      .map((r) => {
+        const comp = compMap[r.dia];
+        const despesas = num(r.despesas) || num(comp?.despesas) || 0;
+        const receitas = num(r.receitas) || num(comp?.receitas) || 0;
+        const saldoInicial = num(r.saldoInicial ?? comp?.saldoInicial ?? state.saldoInicial);
+        const saldoFinal = num(r.saldoFinal ?? comp?.saldoFinal ?? saldoInicial - despesas + receitas);
+        return { dia: r.dia, saldoInicial, despesas, receitas, saldoFinal };
+      });
   }
-  return fluxoCaixaComputed().filter((r) => r.dia <= today);
+  return computed.filter((r) => r.dia <= today);
 }
 
 function despSubline(d) {
