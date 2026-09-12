@@ -1,4 +1,4 @@
-const APP_VERSION = "34";
+const APP_VERSION = "35";
 const INSTALL_HINT_KEY = "financas-install-hint-v11";
 const KEY = "minhas-financas-config";
 const SCOPE =
@@ -30,6 +30,7 @@ const state = {
   orcamento: [],
   listas: { categorias: [], tipos: [], prioridades: [], pagamentos: [], contas: [] },
   query: "",
+  searchHitRow: null,
   filtro: "todas",
   despSort: "vencimento",
   sheetOpen: false,
@@ -815,7 +816,59 @@ function metrics() {
 }
 
 function despValor(d) {
-  return Number(d.pago ? d.realizado || d.previsto : d.previsto) || 0;
+  return num(d.pago ? d.realizado || d.previsto : d.previsto);
+}
+
+function filteredDespesasBase() {
+  let list = monthDespesas();
+  if (state.filtro === "pagar") list = list.filter((d) => !d.pago);
+  if (state.filtro === "atrasadas") list = list.filter((d) => String(d.status).toLowerCase().includes("atras"));
+  return list;
+}
+
+function findSearchHitRow(list, q) {
+  const t = String(q || "").trim();
+  if (!t) return null;
+
+  if (isValueQuery(t)) {
+    const target = num(t);
+    if (!target) return null;
+    let best = null;
+    let bestVal = Infinity;
+    for (const d of list) {
+      const v = despValor(d);
+      if (v >= target && v < bestVal) {
+        best = d;
+        bestVal = v;
+      }
+    }
+    return best?.sheetRow ?? null;
+  }
+
+  const qDate = parseQueryDate(t);
+  if (qDate) {
+    let best = null;
+    let bestDate = null;
+    for (const d of list) {
+      const v = d.vencimento?.slice(0, 10) || "";
+      if (v && v >= qDate && (!bestDate || v < bestDate)) {
+        best = d;
+        bestDate = v;
+      }
+    }
+    return best?.sheetRow ?? null;
+  }
+
+  return null;
+}
+
+function updateSearchHit() {
+  const q = state.query.trim();
+  if (state.tab !== "despesas" || !q || (!isValueQuery(q) && !parseQueryDate(q))) {
+    state.searchHitRow = null;
+    return;
+  }
+  state.searchHitRow = findSearchHitRow(filteredDespesasBase(), q);
 }
 
 function despPgtoDate(d) {
@@ -985,39 +1038,27 @@ function compareDataValorDesc(va, vb, a, b) {
 }
 
 function sortedDespesas() {
-  let list = monthDespesas();
-  if (state.filtro === "pagar") list = list.filter((d) => !d.pago);
-  if (state.filtro === "atrasadas") list = list.filter((d) => String(d.status).toLowerCase().includes("atras"));
-
+  let list = filteredDespesasBase();
   const q = state.query.trim();
   let sortMode = state.despSort || "vencimento";
 
   if (q) {
     if (isValueQuery(q)) {
       sortMode = "valor";
-      const minVal = num(q);
-      list = list.filter((d) => despValor(d) >= minVal);
+    } else if (parseQueryDate(q)) {
+      sortMode = "vencimento";
     } else {
-      const qDate = parseQueryDate(q);
-      if (qDate) {
-        sortMode = "vencimento";
-        list = list.filter((d) => {
-          const v = d.vencimento?.slice(0, 10) || "";
-          return v && v >= qDate;
-        });
-      } else {
-        const ql = q.toLowerCase();
-        list = list.filter(
-          (d) =>
-            String(d.descricao).toLowerCase().includes(ql) ||
-            String(d.categoria).toLowerCase().includes(ql)
-        );
-      }
+      const ql = q.toLowerCase();
+      list = list.filter(
+        (d) =>
+          String(d.descricao).toLowerCase().includes(ql) ||
+          String(d.categoria).toLowerCase().includes(ql)
+      );
     }
   }
 
   if (sortMode === "valor") {
-    list.sort((a, b) => despValor(b) - despValor(a));
+    list.sort((a, b) => despValor(a) - despValor(b));
   } else if (sortMode === "pgto") {
     list.sort((a, b) =>
       compareDataValorDesc(despPgtoDate(a), despPgtoDate(b), a, b)
@@ -1313,10 +1354,11 @@ function orcamentoView(m) {
 }
 
 function despesasView() {
+  const hit = state.searchHitRow;
   const list = sortedDespesas()
     .map(
       (d) => `
-      <div class="item" data-row="${d.sheetRow}" data-kind="despesa" role="button" tabindex="0">
+      <div class="item${d.sheetRow === hit ? " search-hit" : ""}" data-row="${d.sheetRow}" data-kind="despesa" role="button" tabindex="0">
         <span class="check ${d.pago ? "yes" : ""}" data-toggle="${d.sheetRow}">${d.pago ? "✓" : ""}</span>
         <span class="mid"><b>${esc(d.descricao || "(sem descrição)")}</b><small>${despSubline(d)}</small></span>
         <span class="right"><b>${brl(despValor(d))}</b><span class="pill ${pillClass(d.status)}">${esc(d.status || (d.pago ? "Pago" : "Pendente"))}</span></span>
@@ -1472,7 +1514,17 @@ function appView() {
     <div class="toast ${state.toast ? "show" : ""}">${esc(state.toast)}</div></div>`;
 }
 
+function scrollToSearchHit() {
+  if (!state.searchHitRow) return;
+  requestAnimationFrame(() => {
+    document
+      .querySelector(`.item[data-row="${state.searchHitRow}"]`)
+      ?.scrollIntoView({ block: "center", behavior: "smooth" });
+  });
+}
+
 function render() {
+  updateSearchHit();
   const root = document.getElementById("root");
   const ready = state.clientId && state.spreadsheetId && state.token;
   const active = document.activeElement;
@@ -1491,11 +1543,7 @@ function render() {
       }
     }
   }
-  if (state.tab === "despesas" && state.query.trim() && (isValueQuery(state.query) || parseQueryDate(state.query))) {
-    requestAnimationFrame(() => {
-      document.querySelector("#despScroll .item")?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-    });
-  }
+  scrollToSearchHit();
 }
 
 function readFormFromDom() {
@@ -1908,6 +1956,17 @@ function bind() {
     if (isValueQuery(state.query)) state.despSort = "valor";
     else if (parseQueryDate(state.query)) state.despSort = "vencimento";
     render();
+  });
+  on("q", "keydown", (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    updateSearchHit();
+    if (state.searchHitRow) scrollToSearchHit();
+    else {
+      const q = state.query.trim();
+      if (isValueQuery(q)) showToast(`Nenhuma despesa com valor ≥ ${brl(num(q))}`);
+      else if (parseQueryDate(q)) showToast(`Nenhuma despesa com vencimento ≥ ${q}`);
+    }
   });
   document.querySelectorAll("[data-sort]").forEach((b) =>
     b.addEventListener("click", () => {
