@@ -1,4 +1,4 @@
-const APP_VERSION = "36";
+const APP_VERSION = "37";
 const INSTALL_HINT_KEY = "financas-install-hint-v11";
 const KEY = "minhas-financas-config";
 const SCOPE =
@@ -1286,10 +1286,10 @@ function painelView(m) {
         </div>
       </div>
       <div class="title">${esc(state.mes)} ${esc(state.ano)}</div>
-      <div class="hero">
-        <div class="lbl">Saldo do mês</div>
-        <div class="val">${brl(m.saldo)}</div>
-        <div class="sub">receitas realizadas − despesas realizadas</div>
+      <div class="hero hero-sobrando">
+        <div class="lbl">Sobrando</div>
+        <div class="val">${brl(m.sobrando)}</div>
+        <div class="sub">saldo do mês − a pagar ainda</div>
       </div>
       <div class="grid2">
         <div class="kpi"><span>RECEITAS</span><b style="color:var(--emerald)">${brl(m.receitas)}</b><small class="kpi-hint">só recebidas</small></div>
@@ -1297,7 +1297,7 @@ function painelView(m) {
         <div class="kpi"><span>REALIZADO</span><b style="color:var(--rose)">${brl(m.realizado)}</b><small class="kpi-hint">só pagas</small></div>
         <div class="kpi"><span>A PAGAR AINDA</span><b style="color:var(--violet)">${brl(m.pagar)}</b><small class="kpi-hint">previsto em aberto</small></div>
         <div class="kpi"><span>USO DO ORÇAMENTO</span><b>${m.previsto ? pct(m.uso * 100) : "—"}</b><small class="kpi-hint">realizado ÷ previsto</small></div>
-        <div class="kpi kpi-sobrando"><span>SOBRANDO</span><b>${brl(m.sobrando)}</b><small class="kpi-hint">saldo do mês − a pagar ainda</small></div>
+        <div class="kpi"><span>SALDO DO MÊS</span><b>${brl(m.saldo)}</b><small class="kpi-hint">receitas realizadas − despesas realizadas</small></div>
       </div>
       <div class="section">Termômetro</div>
       <div class="grid2">

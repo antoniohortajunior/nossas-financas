@@ -52,6 +52,9 @@ body {
   border-radius: 22px;
   padding: 20px 18px 18px;
 }
+.hero-sobrando {
+  background: linear-gradient(160deg, #047857, #059669 55%, #065f46);
+}
 .hero .lbl { font-size: 12px; opacity: 0.8; }
 .hero .val { font-size: 32px; font-weight: 700; letter-spacing: -0.04em; margin-top: 4px; }
 .hero .sub { font-size: 12px; opacity: 0.75; margin-top: 4px; }
@@ -72,12 +75,6 @@ body {
   margin-top: 2px;
   line-height: 1.25;
 }
-.kpi-sobrando {
-  background: linear-gradient(180deg, #ecfdf5 0%, #fff 100%);
-  border-color: #a7f3d0;
-}
-.kpi-sobrando span { color: #047857; }
-.kpi-sobrando b { color: var(--emerald); }
 .section { margin-top: 20px; font-size: 13px; font-weight: 700; }
 .bar-row { margin-top: 10px; }
 .bar-row .top { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 6px; }
