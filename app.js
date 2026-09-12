@@ -1,4 +1,4 @@
-const APP_VERSION = "35";
+const APP_VERSION = "36";
 const INSTALL_HINT_KEY = "financas-install-hint-v11";
 const KEY = "minhas-financas-config";
 const SCOPE =
@@ -1040,38 +1040,37 @@ function compareDataValorDesc(va, vb, a, b) {
 function sortedDespesas() {
   let list = filteredDespesasBase();
   const q = state.query.trim();
-  let sortMode = state.despSort || "vencimento";
 
-  if (q) {
-    if (isValueQuery(q)) {
-      sortMode = "valor";
-    } else if (parseQueryDate(q)) {
-      sortMode = "vencimento";
-    } else {
-      const ql = q.toLowerCase();
-      list = list.filter(
-        (d) =>
-          String(d.descricao).toLowerCase().includes(ql) ||
-          String(d.categoria).toLowerCase().includes(ql)
-      );
-    }
+  if (q && !isValueQuery(q) && !parseQueryDate(q)) {
+    const ql = q.toLowerCase();
+    list = list.filter(
+      (d) =>
+        String(d.descricao).toLowerCase().includes(ql) ||
+        String(d.categoria).toLowerCase().includes(ql)
+    );
   }
 
+  const sortMode = state.despSort || "vencimento";
   if (sortMode === "valor") {
-    list.sort((a, b) => despValor(a) - despValor(b));
+    list.sort((a, b) => {
+      const d = despValor(a) - despValor(b);
+      return d !== 0 ? d : a.sheetRow - b.sheetRow;
+    });
   } else if (sortMode === "pgto") {
-    list.sort((a, b) =>
-      compareDataValorDesc(despPgtoDate(a), despPgtoDate(b), a, b)
-    );
+    list.sort((a, b) => {
+      const d = compareDataValorDesc(despPgtoDate(a), despPgtoDate(b), a, b);
+      return d !== 0 ? d : a.sheetRow - b.sheetRow;
+    });
   } else {
-    list.sort((a, b) =>
-      compareDataValorDesc(
+    list.sort((a, b) => {
+      const d = compareDataValorDesc(
         a.vencimento?.slice(0, 10) || "",
         b.vencimento?.slice(0, 10) || "",
         a,
         b
-      )
-    );
+      );
+      return d !== 0 ? d : a.sheetRow - b.sheetRow;
+    });
   }
   return list;
 }
@@ -1517,9 +1516,11 @@ function appView() {
 function scrollToSearchHit() {
   if (!state.searchHitRow) return;
   requestAnimationFrame(() => {
-    document
-      .querySelector(`.item[data-row="${state.searchHitRow}"]`)
-      ?.scrollIntoView({ block: "center", behavior: "smooth" });
+    requestAnimationFrame(() => {
+      document
+        .querySelector(`.item[data-row="${state.searchHitRow}"]`)
+        ?.scrollIntoView({ block: "center", behavior: "smooth" });
+    });
   });
 }
 
@@ -1537,7 +1538,8 @@ function render() {
   if (activeId) {
     const el = document.getElementById(activeId);
     if (el) {
-      el.focus();
+      const focusOpts = activeId === "q" ? { preventScroll: true } : undefined;
+      el.focus(focusOpts);
       if (typeof sel === "number" && el.setSelectionRange) {
         try { el.setSelectionRange(sel, sel); } catch (_) {}
       }
@@ -1854,6 +1856,43 @@ function bindRootActions() {
   if (!root || root.dataset.actionsBound) return;
   root.dataset.actionsBound = "1";
   root.addEventListener("click", (e) => {
+    const sortBtn = e.target.closest("[data-sort]");
+    if (sortBtn) {
+      e.preventDefault();
+      state.despSort = sortBtn.dataset.sort;
+      render();
+      return;
+    }
+    const filtroBtn = e.target.closest("[data-filtro]");
+    if (filtroBtn) {
+      e.preventDefault();
+      state.filtro = filtroBtn.dataset.filtro;
+      render();
+      return;
+    }
+    const tabBtn = e.target.closest("[data-tab]");
+    if (tabBtn) {
+      state.tab = tabBtn.dataset.tab;
+      state.sheetOpen = false;
+      state.deleteConfirm = null;
+      render();
+      return;
+    }
+    const itemBtn = e.target.closest(".item[data-row]");
+    if (itemBtn && !e.target.closest("[data-toggle]") && !e.target.closest("[data-toggle-rec]")) {
+      openEdit(Number(itemBtn.dataset.row), itemBtn.dataset.kind || "despesa");
+      return;
+    }
+    const toggleDesp = e.target.closest("[data-toggle]");
+    if (toggleDesp) {
+      togglePago(Number(toggleDesp.dataset.toggle), e, "despesa");
+      return;
+    }
+    const toggleRec = e.target.closest("[data-toggle-rec]");
+    if (toggleRec) {
+      togglePago(Number(toggleRec.dataset.toggleRec), e, "receita");
+      return;
+    }
     if (e.target.closest("#btnDeleteDesp")) {
       e.preventDefault();
       e.stopPropagation();
@@ -1911,14 +1950,6 @@ function bind() {
     }
   });
 
-  document.querySelectorAll("[data-tab]").forEach((b) =>
-    b.addEventListener("click", () => {
-      state.tab = b.dataset.tab;
-      state.sheetOpen = false;
-      state.deleteConfirm = null;
-      render();
-    })
-  );
   on("btnReload", "click", () => refresh());
   on("fab", "click", () => openNew("despesa"));
   on("fabRec", "click", () => openNew("receita"));
@@ -1953,8 +1984,6 @@ function bind() {
   on("saveBtn", "click", saveSheet);
   on("q", "input", (e) => {
     state.query = e.target.value;
-    if (isValueQuery(state.query)) state.despSort = "valor";
-    else if (parseQueryDate(state.query)) state.despSort = "vencimento";
     render();
   });
   on("q", "keydown", (e) => {
@@ -1968,30 +1997,6 @@ function bind() {
       else if (parseQueryDate(q)) showToast(`Nenhuma despesa com vencimento ≥ ${q}`);
     }
   });
-  document.querySelectorAll("[data-sort]").forEach((b) =>
-    b.addEventListener("click", () => {
-      state.despSort = b.dataset.sort;
-      render();
-    })
-  );
-  document.querySelectorAll("[data-filtro]").forEach((b) =>
-    b.addEventListener("click", () => {
-      state.filtro = b.dataset.filtro;
-      render();
-    })
-  );
-  document.querySelectorAll(".item[data-row]").forEach((b) =>
-    b.addEventListener("click", (e) => {
-      if (e.target.closest("[data-toggle]") || e.target.closest("[data-toggle-rec]")) return;
-      openEdit(Number(b.dataset.row), b.dataset.kind || "despesa");
-    })
-  );
-  document.querySelectorAll("[data-toggle]").forEach((b) =>
-    b.addEventListener("click", (e) => togglePago(Number(b.dataset.toggle), e, "despesa"))
-  );
-  document.querySelectorAll("[data-toggle-rec]").forEach((b) =>
-    b.addEventListener("click", (e) => togglePago(Number(b.dataset.toggleRec), e, "receita"))
-  );
 }
 
 async function boot() {

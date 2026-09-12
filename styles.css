@@ -179,6 +179,8 @@ body {
   color: var(--muted);
   text-transform: lowercase;
   line-height: 1.1;
+  cursor: pointer;
+  touch-action: manipulation;
 }
 .sort-btn.on { background: var(--ink); color: #fff; border-color: var(--ink); }
 .search {
@@ -203,6 +205,11 @@ body {
   font-family: inherit;
 }
 .chip.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+.item.search-hit {
+  border-color: var(--teal);
+  box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.22);
+  background: #f0fdfa;
+}
 .item {
   margin-top: 8px;
   background: #fff;
