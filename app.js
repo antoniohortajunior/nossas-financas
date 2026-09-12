@@ -1,4 +1,4 @@
-const APP_VERSION = "33";
+const APP_VERSION = "34";
 const INSTALL_HINT_KEY = "financas-install-hint-v11";
 const KEY = "minhas-financas-config";
 const SCOPE =
@@ -875,13 +875,21 @@ function validateDataMovimento(isoDate, label = "pagamento/recebimento") {
   return null;
 }
 
+function despesaDataPagamento(fOrRow) {
+  const pgto = fOrRow.dataPagamento?.slice(0, 10) || "";
+  const venc = fOrRow.vencimento?.slice(0, 10) || "";
+  return pgto || venc || "";
+}
+
 function validatePagoRecebido(f, kind) {
   if (!f.pago) return null;
   if (kind === "receita") {
     const dt = f.dataRecebimento || f.vencimento;
     return validateDataMovimento(dt, "recebimento");
   }
-  return validateDataMovimento(f.dataPagamento, "pagamento");
+  const dt = despesaDataPagamento(f);
+  if (!dt) return "Informe o vencimento ou a data de pagamento.";
+  return validateDataMovimento(dt, "pagamento");
 }
 
 /** Data da receita no fluxo — igual à planilha: Data prevista (col E). */
@@ -1400,12 +1408,14 @@ function sheetView() {
           <div class="field"><label>Previsto</label><input id="fPrev" inputmode="decimal" value="${esc(f.previsto)}" placeholder="0,00" /></div>
           <div class="field"><label>Vencimento</label><input id="fVenc" type="date" value="${esc(f.vencimento)}" /></div>
         </div>
+        <div class="field">
+          <label>Data de pagamento</label>
+          <input id="fPgto" type="date" value="${esc(f.dataPagamento || "")}" />
+          <small class="kpi-hint">Se marcar como pago sem data, usa o vencimento (pode alterar depois)</small>
+        </div>
         <div class="toggle">Já paguei <div class="switch ${f.pago ? "on" : ""}" id="pagoSwitch"><i></i></div></div>
         <div class="field ${f.pago ? "" : "hidden"}" id="realizadoField">
           <label>Realizado</label><input id="fReal" inputmode="decimal" value="${esc(f.realizado)}" placeholder="0,00" />
-        </div>
-        <div class="field ${f.pago ? "" : "hidden"}" id="pgtoField">
-          <label>Pagamento</label><input id="fPgto" type="date" value="${esc(f.dataPagamento || "")}" />
         </div>
         <button class="more" id="moreBtn">${state.moreOpen ? "Menos detalhes" : "Mais detalhes"}</button>
         <div class="${state.moreOpen ? "" : "hidden"}" id="extra">
@@ -1638,7 +1648,7 @@ async function saveSheet() {
         observacoes: f.observacoes,
       };
   if (!isRec && idx.dataPagamento != null) {
-    writes.dataPagamento = f.pago ? isoToBR(f.dataPagamento) : "";
+    writes.dataPagamento = f.pago ? isoToBR(despesaDataPagamento(f)) : "";
   }
   if (isRec && idx.dataRecebimento != null) {
     writes.dataRecebimento = f.pago ? isoToBR(f.dataRecebimento || f.vencimento) : "";
@@ -1678,11 +1688,12 @@ async function togglePago(row, ev, kind = "despesa") {
   const next = !d.pago;
   if (next) {
     if (kind === "despesa") {
-      if (!d.dataPagamento) {
-        showToast("Informe a data de pagamento em Editar antes de marcar como pago.");
+      const dt = despesaDataPagamento(d);
+      if (!dt) {
+        showToast("Informe o vencimento antes de marcar como pago.");
         return;
       }
-      const err = validateDataMovimento(d.dataPagamento, "pagamento");
+      const err = validateDataMovimento(dt, "pagamento");
       if (err) {
         showToast(err);
         return;
@@ -1703,6 +1714,12 @@ async function togglePago(row, ev, kind = "despesa") {
   const data = [{ range: `${sheet}!${colLetter(d.idx.pago)}${row}`, values: [[next]] }];
   if (next && !d.realizado && d.previsto) {
     data.push({ range: `${sheet}!${colLetter(d.idx.realizado)}${row}`, values: [[d.previsto]] });
+  }
+  if (next && kind === "despesa" && d.idx.dataPagamento != null) {
+    const pgto = despesaDataPagamento(d);
+    if (pgto) {
+      data.push({ range: `${sheet}!${colLetter(d.idx.dataPagamento)}${row}`, values: [[isoToBR(pgto)]] });
+    }
   }
   if (kind === "despesa" && !next && d.idx.dataPagamento != null) {
     data.push({ range: `${sheet}!${colLetter(d.idx.dataPagamento)}${row}`, values: [[""]] });
@@ -1880,6 +1897,9 @@ function bind() {
     }
     state.form.pago = next;
     if (state.form.pago && !state.form.realizado) state.form.realizado = state.form.previsto;
+    if (state.form.pago && state.sheetKind === "despesa" && !state.form.dataPagamento && state.form.vencimento) {
+      state.form.dataPagamento = state.form.vencimento;
+    }
     render();
   });
   on("saveBtn", "click", saveSheet);
