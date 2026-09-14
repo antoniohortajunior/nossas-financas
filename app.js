@@ -1,4 +1,4 @@
-const APP_VERSION = "37";
+const APP_VERSION = "38";
 const INSTALL_HINT_KEY = "financas-install-hint-v11";
 const KEY = "minhas-financas-config";
 const SCOPE =
@@ -226,6 +226,47 @@ function colLetter(i) {
   return s;
 }
 
+const DESP_COL = {
+  pago: 0,
+  competencia: 1,
+  categoria: 2,
+  descricao: 3,
+  tipo: 4,
+  vencimento: 5,
+  dataPagamento: 6,
+  prioridade: 7,
+  status: 8,
+  dias: 9,
+  previsto: 10,
+  realizado: 11,
+  pct: 12,
+  diferenca: 13,
+  situacao: 14,
+  formaPagamento: 16,
+  conta: 17,
+  recorrente: 18,
+  parcela: 19,
+  observacoes: 20,
+};
+
+const DATA_PAGAMENTO_HEADERS = new Set([
+  "pagamento",
+  "data pagamento",
+  "data do pagamento",
+  "data pago",
+  "dt pagamento",
+  "dt. pagamento",
+]);
+
+function isFormaPagamentoHeader(k) {
+  return k.includes("forma") && k.includes("pag");
+}
+
+function despColIdx(idx, field) {
+  if (idx?.[field] != null) return idx[field];
+  return DESP_COL[field] ?? null;
+}
+
 function mapHeaders(row) {
   const aliases = {
     pago: ["pago?", "pago", "recebido?", "recebido"],
@@ -243,7 +284,6 @@ function mapHeaders(row) {
     pct: ["%"],
     diferenca: ["diferença", "diferenca"],
     situacao: ["situação", "situacao"],
-    dataPagamento: ["pagamento", "data pagamento", "data do pagamento", "data pago", "dt pagamento", "dt. pagamento"],
     dataRecebimento: ["recebimento", "data recebimento", "data do recebimento", "dt recebimento"],
     formaPagamento: ["forma pagamento", "forma de pagamento", "meio pagamento", "forma"],
     conta: ["conta"],
@@ -257,8 +297,13 @@ function mapHeaders(row) {
   const idx = {};
   (row || []).forEach((h, i) => {
     const k = String(h || "").trim().toLowerCase();
-    if (k.includes("forma") && k.includes("pag")) return;
+    if (!k || k === "pagamentos" || isFormaPagamentoHeader(k)) return;
+    if (DATA_PAGAMENTO_HEADERS.has(k)) {
+      idx.dataPagamento = i;
+      return;
+    }
     for (const [field, names] of Object.entries(aliases)) {
+      if (field === "formaPagamento" && k !== "forma" && !isFormaPagamentoHeader(k)) continue;
       if (names.includes(k) || (field === "classe" && k.includes("classe"))) idx[field] = i;
       else if (
         field === "limite" &&
@@ -268,6 +313,7 @@ function mapHeaders(row) {
         idx[field] = i;
     }
   });
+  if (idx.dataPagamento == null) idx.dataPagamento = DESP_COL.dataPagamento;
   return idx;
 }
 
@@ -1697,7 +1743,7 @@ async function saveSheet() {
         parcela: f.parcela,
         observacoes: f.observacoes,
       };
-  if (!isRec && idx.dataPagamento != null) {
+  if (!isRec) {
     writes.dataPagamento = f.pago ? isoToBR(despesaDataPagamento(f)) : "";
   }
   if (isRec && idx.dataRecebimento != null) {
@@ -1705,9 +1751,10 @@ async function saveSheet() {
   }
   const data = [];
   for (const [field, value] of Object.entries(writes)) {
-    if (idx[field] == null) continue;
+    const col = isRec ? idx[field] : despColIdx(idx, field);
+    if (col == null) continue;
     data.push({
-      range: `${sheet}!${colLetter(idx[field])}${row}`,
+      range: `${sheet}!${colLetter(col)}${row}`,
       values: [[value]],
     });
   }
@@ -1761,18 +1808,22 @@ async function togglePago(row, ev, kind = "despesa") {
       }
     }
   }
-  const data = [{ range: `${sheet}!${colLetter(d.idx.pago)}${row}`, values: [[next]] }];
+  const pagoCol = kind === "despesa" ? despColIdx(d.idx, "pago") : d.idx.pago;
+  const data = [{ range: `${sheet}!${colLetter(pagoCol)}${row}`, values: [[next]] }];
   if (next && !d.realizado && d.previsto) {
-    data.push({ range: `${sheet}!${colLetter(d.idx.realizado)}${row}`, values: [[d.previsto]] });
+    const realCol = kind === "despesa" ? despColIdx(d.idx, "realizado") : d.idx.realizado;
+    data.push({ range: `${sheet}!${colLetter(realCol)}${row}`, values: [[d.previsto]] });
   }
-  if (next && kind === "despesa" && d.idx.dataPagamento != null) {
-    const pgto = despesaDataPagamento(d);
-    if (pgto) {
-      data.push({ range: `${sheet}!${colLetter(d.idx.dataPagamento)}${row}`, values: [[isoToBR(pgto)]] });
+  if (kind === "despesa") {
+    const pgtoCol = despColIdx(d.idx, "dataPagamento");
+    if (next) {
+      const pgto = despesaDataPagamento(d);
+      if (pgto) {
+        data.push({ range: `${sheet}!${colLetter(pgtoCol)}${row}`, values: [[isoToBR(pgto)]] });
+      }
+    } else {
+      data.push({ range: `${sheet}!${colLetter(pgtoCol)}${row}`, values: [[""]] });
     }
-  }
-  if (kind === "despesa" && !next && d.idx.dataPagamento != null) {
-    data.push({ range: `${sheet}!${colLetter(d.idx.dataPagamento)}${row}`, values: [[""]] });
   }
   if (kind === "receita" && !next && d.idx.dataRecebimento != null) {
     data.push({ range: `${sheet}!${colLetter(d.idx.dataRecebimento)}${row}`, values: [[""]] });
