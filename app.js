@@ -1,4 +1,4 @@
-const APP_VERSION = "39";
+const APP_VERSION = "42";
 const INSTALL_HINT_KEY = "financas-install-hint-v11";
 const KEY = "minhas-financas-config";
 const SCOPE =
@@ -70,7 +70,7 @@ function blankForm(kind = "despesa") {
     previsto: "",
     realizado: "",
     dataPagamento: "",
-    tipoPgto: "Pix",
+    tipoPgto: "Crédito",
     conta: "Nubank",
     recorrente: "Não",
     parcela: "",
@@ -1014,6 +1014,17 @@ function despesaDataPagamento(fOrRow) {
   return pgto || venc || "";
 }
 
+/** Ao marcar pago: mesma data em vencimento (F) e pagamento (G). */
+function syncDespesaDatasPago(form) {
+  if (!form?.pago) return;
+  const pgto = form.dataPagamento?.slice(0, 10) || "";
+  const venc = form.vencimento?.slice(0, 10) || "";
+  const data = pgto || venc;
+  if (!data) return;
+  form.dataPagamento = data;
+  form.vencimento = data;
+}
+
 function validatePagoRecebido(f, kind) {
   if (!f.pago) return null;
   if (kind === "receita") {
@@ -1117,6 +1128,20 @@ function compareDataValorDesc(va, vb, a, b) {
   return despValor(b) - despValor(a);
 }
 
+function despDtLancamentoSortKey(d) {
+  const raw = String(d.dtLancamento || "").trim();
+  if (!raw) return "";
+  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 16).replace(" ", "T");
+  const m = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2}))?/);
+  if (!m) return raw;
+  const y = m[3];
+  const mo = String(Number(m[2])).padStart(2, "0");
+  const day = String(Number(m[1])).padStart(2, "0");
+  const h = m[4] != null ? String(Number(m[4])).padStart(2, "0") : "00";
+  const min = m[5] != null ? String(Number(m[5])).padStart(2, "0") : "00";
+  return `${y}-${mo}-${day}T${h}:${min}`;
+}
+
 function sortedDespesas() {
   let list = filteredDespesasBase();
   const q = state.query.trim();
@@ -1139,6 +1164,11 @@ function sortedDespesas() {
   } else if (sortMode === "pgto") {
     list.sort((a, b) => {
       const d = compareDataValorDesc(despPgtoDate(a), despPgtoDate(b), a, b);
+      return d !== 0 ? d : a.sheetRow - b.sheetRow;
+    });
+  } else if (sortMode === "lancto") {
+    list.sort((a, b) => {
+      const d = compareDataValorDesc(despDtLancamentoSortKey(a), despDtLancamentoSortKey(b), a, b);
       return d !== 0 ? d : a.sheetRow - b.sheetRow;
     });
   } else {
@@ -1450,9 +1480,10 @@ function despesasView() {
       <div class="title-row">
         <div class="title">Despesas</div>
         <div class="sort-btns">
-          <button type="button" class="sort-btn ${state.despSort === "vencimento" ? "on" : ""}" data-sort="vencimento">vencimento</button>
+          <button type="button" class="sort-btn ${state.despSort === "vencimento" ? "on" : ""}" data-sort="vencimento">vencto</button>
           <button type="button" class="sort-btn ${state.despSort === "pgto" ? "on" : ""}" data-sort="pgto">Pgto</button>
           <button type="button" class="sort-btn ${state.despSort === "valor" ? "on" : ""}" data-sort="valor">valor</button>
+          <button type="button" class="sort-btn ${state.despSort === "lancto" ? "on" : ""}" data-sort="lancto">Lancto</button>
         </div>
       </div>
       <input class="search" id="q" placeholder="Descrição, valor (ex.: 150,00) ou data (dd/mm/aa)" value="${esc(state.query)}" />
@@ -1532,7 +1563,7 @@ function sheetView() {
         <div class="field">
           <label>Data de pagamento</label>
           <input id="fPgto" type="date" value="${esc(f.dataPagamento || "")}" />
-          <small class="kpi-hint">Se marcar como pago sem data, usa o vencimento (pode alterar depois)</small>
+          <small class="kpi-hint">Ao marcar como pago, vencimento e pagamento usam a mesma data</small>
         </div>
         <div class="toggle">Já paguei <div class="switch ${f.pago ? "on" : ""}" id="pagoSwitch"><i></i></div></div>
         <div class="field ${f.pago ? "" : "hidden"}" id="realizadoField">
@@ -1699,7 +1730,7 @@ function openEdit(row, kind = "despesa") {
       previsto: fmtMoneyInput(d.previsto),
       realizado: fmtMoneyInput(d.realizado),
       dataPagamento: d.dataPagamento || "",
-      tipoPgto: d.tipoPgto || "Pix",
+      tipoPgto: d.tipoPgto || "Crédito",
       conta: d.conta || "Nubank",
       recorrente: d.recorrente || "Não",
       parcela: d.parcela,
@@ -1728,6 +1759,7 @@ async function saveSheet() {
     showToast(`Preencha a ${label}.`);
     return;
   }
+  if (!isRec && f.pago) syncDespesaDatasPago(f);
   const pagoErr = validatePagoRecebido(f, isRec ? "receita" : "despesa");
   if (pagoErr) {
     showToast(pagoErr);
@@ -2069,9 +2101,7 @@ function bind() {
     }
     state.form.pago = next;
     if (state.form.pago && !state.form.realizado) state.form.realizado = state.form.previsto;
-    if (state.form.pago && state.sheetKind === "despesa" && !state.form.dataPagamento && state.form.vencimento) {
-      state.form.dataPagamento = state.form.vencimento;
-    }
+    if (state.form.pago && state.sheetKind === "despesa") syncDespesaDatasPago(state.form);
     render();
   });
   on("saveBtn", "click", saveSheet);
