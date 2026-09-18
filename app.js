@@ -1,85 +1,112 @@
-const APP_VERSION = "38";
-const INSTALL_HINT_KEY = "financas-install-hint-v11";
-const KEY = "minhas-financas-config";
-const SCOPE =
-  "https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/userinfo.profile";
-const DEFAULTS = {
-  spreadsheetUrl: "https://docs.google.com/spreadsheets/d/1jSJaWTpsmrjskUPhQS1fvQxVbs7dpI05NMzT7-IkS-o/edit",
-  clientId: "1012119713797-8tig992brdgokg5uovs3oendceb9e5oj.apps.googleusercontent.com",
+const KEY = "esatto-config";
+const APP_VERSION = "27";
+const INSTALL_HINT_KEY = "esatto-install-hint-v25";
+const SPLASH_IN_MS = 550;
+const SPLASH_HOLD_MS = 300;
+const SPLASH_OUT_MS = 400;
+const TOTP_STEP = 20;
+const TOTP_DIGITS = 6;
+const TOTP_SECRET_KEY = "esatto-totp-secret";
+const TOKEN_RING_R = 90;
+const TOKEN_RING_C = 2 * Math.PI * TOKEN_RING_R;
+
+let tokenTimer = null;
+let tokenRaf = null;
+let lastTotpBucket = -1;
+let cachedTokenCode = "000000";
+let autoFullscreenReady = false;
+
+const PREVIEW_SVG = {
+  fornecedores: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 240" fill="none" class="coming-soon-svg" aria-hidden="true">
+  <rect width="360" height="240" rx="16" fill="#f8fafc" stroke="#e2e8f0"/>
+  <rect x="16" y="16" width="328" height="28" rx="8" fill="#0f766e"/>
+  <text x="32" y="35" fill="#fff" font-family="Arial,sans-serif" font-size="12" font-weight="700">Desempenho por Fornecedor</text>
+  <text x="280" y="35" fill="#ccfbf1" font-family="Arial,sans-serif" font-size="10">08/2026</text>
+  <rect x="16" y="54" width="328" height="170" rx="10" fill="#fff" stroke="#e2e8f0"/>
+  <text x="28" y="72" fill="#64748b" font-family="Arial,sans-serif" font-size="9" font-weight="700">FORNECEDOR</text>
+  <text x="200" y="72" fill="#64748b" font-family="Arial,sans-serif" font-size="9" font-weight="700">VENDA</text>
+  <text x="290" y="72" fill="#64748b" font-family="Arial,sans-serif" font-size="9" font-weight="700">% TOTAL</text>
+  <line x1="24" y1="78" x2="336" y2="78" stroke="#e2e8f0"/>
+  <text x="28" y="96" fill="#0f172a" font-family="Arial,sans-serif" font-size="9" font-weight="700">50 Fabricação</text>
+  <rect x="120" y="86" width="140" height="12" rx="4" fill="#e2e8f0"/><rect x="120" y="86" width="112" height="12" rx="4" fill="#d97706"/>
+  <text x="200" y="96" fill="#0f172a" font-family="Arial,sans-serif" font-size="9">R$ 842k</text>
+  <text x="292" y="96" fill="#d97706" font-family="Arial,sans-serif" font-size="9" font-weight="700">18,2%</text>
+  <text x="28" y="118" fill="#0f172a" font-family="Arial,sans-serif" font-size="9" font-weight="700">4241 Minuano</text>
+  <rect x="120" y="108" width="140" height="12" rx="4" fill="#e2e8f0"/><rect x="120" y="108" width="98" height="12" rx="4" fill="#0f766e"/>
+  <text x="200" y="118" fill="#0f172a" font-family="Arial,sans-serif" font-size="9">R$ 615k</text>
+  <text x="292" y="118" fill="#0f766e" font-family="Arial,sans-serif" font-size="9" font-weight="700">13,3%</text>
+  <text x="28" y="140" fill="#0f172a" font-family="Arial,sans-serif" font-size="9" font-weight="700">6476 Picolin</text>
+  <rect x="120" y="130" width="140" height="12" rx="4" fill="#e2e8f0"/><rect x="120" y="130" width="76" height="12" rx="4" fill="#0284c7"/>
+  <text x="200" y="140" fill="#0f172a" font-family="Arial,sans-serif" font-size="9">R$ 478k</text>
+  <text x="292" y="140" fill="#0284c7" font-family="Arial,sans-serif" font-size="9" font-weight="700">10,4%</text>
+  <line x1="24" y1="176" x2="336" y2="176" stroke="#e2e8f0"/>
+  <text x="28" y="194" fill="#64748b" font-family="Arial,sans-serif" font-size="9">Top 4 fornecedores do periodo</text>
+  <rect x="220" y="184" width="108" height="18" rx="6" fill="#f0fdfa" stroke="#99f6e4"/>
+  <text x="274" y="197" text-anchor="middle" fill="#115e59" font-family="Arial,sans-serif" font-size="9" font-weight="700">Relatorio PDF</text>
+</svg>`,
+  caixa: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 240" fill="none" class="coming-soon-svg" aria-hidden="true">
+  <rect width="360" height="240" rx="16" fill="#f8fafc" stroke="#e2e8f0"/>
+  <rect x="16" y="16" width="328" height="28" rx="8" fill="#1e40af"/>
+  <text x="32" y="35" fill="#fff" font-family="Arial,sans-serif" font-size="12" font-weight="700">Fluxo de Caixa</text>
+  <text x="268" y="35" fill="#bfdbfe" font-family="Arial,sans-serif" font-size="10">Semana MG + DF</text>
+  <rect x="16" y="54" width="100" height="52" rx="10" fill="#ecfdf5" stroke="#6ee7b7"/>
+  <text x="28" y="72" fill="#059669" font-family="Arial,sans-serif" font-size="9" font-weight="700">ENTRADAS</text>
+  <text x="28" y="92" fill="#047857" font-family="Arial,sans-serif" font-size="13" font-weight="700">R$ 1,24M</text>
+  <rect x="130" y="54" width="100" height="52" rx="10" fill="#fef2f2" stroke="#fca5a5"/>
+  <text x="142" y="72" fill="#e11d48" font-family="Arial,sans-serif" font-size="9" font-weight="700">SAIDAS</text>
+  <text x="142" y="92" fill="#be123c" font-family="Arial,sans-serif" font-size="13" font-weight="700">R$ 980k</text>
+  <rect x="244" y="54" width="100" height="52" rx="10" fill="#eff6ff" stroke="#93c5fd"/>
+  <text x="256" y="72" fill="#0284c7" font-family="Arial,sans-serif" font-size="9" font-weight="700">SALDO</text>
+  <text x="256" y="92" fill="#0369a1" font-family="Arial,sans-serif" font-size="13" font-weight="700">R$ 260k</text>
+  <rect x="16" y="118" width="328" height="106" rx="10" fill="#fff" stroke="#e2e8f0"/>
+  <polyline points="32,198 72,176 112,184 152,150 192,158 232,132 272,140 312,118" stroke="#0284c7" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="32,198 72,188 112,194 152,186 192,190 232,182 272,188 312,194" stroke="#059669" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="4 3"/>
+  <circle cx="152" cy="150" r="4" fill="#0284c7"/><circle cx="232" cy="132" r="4" fill="#0284c7"/><circle cx="312" cy="118" r="4" fill="#0284c7"/>
+  <text x="28" y="136" fill="#64748b" font-family="Arial,sans-serif" font-size="9">Saldo acumulado</text>
+  <line x1="24" y1="206" x2="336" y2="206" stroke="#e2e8f0"/>
+  <text x="28" y="218" fill="#64748b" font-family="Arial,sans-serif" font-size="9">Seg</text>
+  <text x="72" y="218" fill="#64748b" font-family="Arial,sans-serif" font-size="9">Ter</text>
+  <text x="116" y="218" fill="#64748b" font-family="Arial,sans-serif" font-size="9">Qua</text>
+  <text x="160" y="218" fill="#64748b" font-family="Arial,sans-serif" font-size="9">Qui</text>
+  <text x="204" y="218" fill="#64748b" font-family="Arial,sans-serif" font-size="9">Sex</text>
+  <text x="248" y="218" fill="#64748b" font-family="Arial,sans-serif" font-size="9">Sab</text>
+  <text x="292" y="218" fill="#64748b" font-family="Arial,sans-serif" font-size="9">Dom</text>
+</svg>`,
 };
-const MONTHS = [
-  "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
-  "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
-];
+const PCT_CAP = 999.99;
 
 const state = {
-  tab: "painel",
-  clientId: "",
-  spreadsheetId: "",
-  token: null,
+  tab: "desempenho",
+  apiUrl: "",
+  token: "",
+  usuario: "",
+  inicio: "",
+  fim: "",
   loading: false,
   error: "",
-  nome: "",
-  mes: "",
-  ano: new Date().getFullYear(),
-  mesNum: new Date().getMonth() + 1,
-  mesStart: "",
-  mesEnd: "",
-  despesas: [],
-  receitas: [],
-  orcamento: [],
-  listas: { categorias: [], tipos: [], prioridades: [], pagamentos: [], contas: [] },
-  query: "",
-  searchHitRow: null,
-  filtro: "todas",
-  despSort: "vencimento",
+  data: null,
   sheetOpen: false,
-  sheetKind: "despesa",
-  moreOpen: false,
-  editingRow: null,
+  tokenScreenOpen: false,
+  loginUser: "",
+  loginPass: "",
   toast: "",
-  hint: "",
-  booting: true,
-  deleteConfirm: null,
-  fluxoDias: [],
-  ultimaConsolidacao: null,
-  form: blankForm(),
+  charts: { vendas: null, variacao: null },
+  sortMode: "loja",
 };
 
-function blankForm(kind = "despesa") {
-  if (kind === "receita") {
-    return {
-      pago: false,
-      descricao: "",
-      fonte: "Salário",
-      vencimento: todayISO(),
-      previsto: "",
-      realizado: "",
-      conta: "Nubank",
-      observacoes: "",
-      dataRecebimento: "",
-    };
-  }
-  return {
-    pago: false,
-    descricao: "",
-    categoria: "Moradia",
-    tipo: "Variável",
-    vencimento: todayISO(),
-    prioridade: "Média",
-    previsto: "",
-    realizado: "",
-    dataPagamento: "",
-    conta: "Nubank",
-    recorrente: "Não",
-    parcela: "",
-    observacoes: "",
-  };
+function inferredApiUrl() {
+  const { origin, port, protocol, hostname } = window.location;
+  if (protocol !== "http:" && protocol !== "https:") return "";
+  if (port === "4190" || port === "5173") return "";
+  if (hostname === "app.sistemaesatto.com.br") return origin;
+  if (port === "8080" || port === "80" || port === "443" || port === "8443" || port === "") return origin;
+  return "";
 }
 
-function todayISO() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+function effectiveApiUrl(stored) {
+  const inferred = inferredApiUrl();
+  if (inferred) return inferred;
+  return String(stored || "").trim();
 }
 
 function loadConfig() {
@@ -91,1043 +118,439 @@ function loadConfig() {
 }
 
 function saveConfig(partial) {
-  const next = { ...loadConfig(), ...partial };
-  localStorage.setItem(KEY, JSON.stringify(next));
+  localStorage.setItem(KEY, JSON.stringify({ ...loadConfig(), ...partial }));
 }
 
-function extractSpreadsheetId(input) {
-  const text = String(input || "").trim();
-  const m = text.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
-  if (m) return m[1];
-  if (/^[a-zA-Z0-9-_]{20,}$/.test(text)) return text;
-  return "";
+function todayISO() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-function normalizeClientId(input) {
-  return String(input || "")
-    .trim()
-    .replace(/^https?:\/\//i, "")
-    .replace(/\/+$/, "");
+function firstDayMonthISO() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
 }
 
 function brl(n) {
-  const v = Number(n) || 0;
-  return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  return (Number(n) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
-function pct(n) {
-  return `${Math.round((Number(n) || 0) * 10) / 10}%`.replace(".", ",");
+function formatPctNum(n) {
+  return Number(n).toFixed(1).replace(".", ",");
 }
 
-const PT_MONTH = {
-  jan: 1, fev: 2, mar: 3, abr: 4, mai: 5, jun: 6,
-  jul: 7, ago: 8, set: 9, out: 10, nov: 11, dez: 12,
-};
+function pctPlain(n) {
+  if (n == null || Number.isNaN(n)) return "—";
+  const v = Number(n);
+  if (v > PCT_CAP) return ">999%";
+  if (v < -PCT_CAP) return "-999%";
+  return `${formatPctNum(v)}%`;
+}
 
-function serialToISO(v) {
-  if (v == null || v === "") return "";
-  if (typeof v === "string") {
-    const br = v.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-    if (br) return `${br[3]}-${br[2].padStart(2, "0")}-${br[1].padStart(2, "0")}`;
-    if (/^\d{4}-\d{2}-\d{2}/.test(v)) return v.slice(0, 10);
-    const mmy = v.toLowerCase().match(/([a-z]{3,9})[\s./\\-]+(?:de\s*)?(\d{4})/);
-    if (!mmy) {
-      const mmy2 = v.toLowerCase().match(/([a-z]{3,9})\.?\s*(?:de\s*)?(\d{4})/);
-      if (mmy2) {
-        const key = mmy2[1].slice(0, 3);
-        const mon = PT_MONTH[key] || MONTHS.findIndex((m) => m.toLowerCase().startsWith(key)) + 1;
-        if (mon > 0) return `${mmy2[2]}-${String(mon).padStart(2, "0")}-01`;
-      }
-    } else {
-      const key = mmy[1].slice(0, 3);
-      const mon = PT_MONTH[key] || MONTHS.findIndex((m) => m.toLowerCase().startsWith(key)) + 1;
-      if (mon > 0) return `${mmy[2]}-${String(mon).padStart(2, "0")}-01`;
-    }
-    return v;
+function pctCapTitle(n) {
+  if (n == null || Number.isNaN(n)) return "";
+  const v = Number(n);
+  if (Math.abs(v) <= PCT_CAP) return "";
+  const sign = v > 0 ? "+" : "";
+  return `${sign}${formatPctNum(v)}%`;
+}
+
+function pct(n, opts = {}) {
+  if (n == null || Number.isNaN(n)) return "—";
+  const v = Number(n);
+  if (!opts.full) {
+    if (v > PCT_CAP) return "+999%";
+    if (v < -PCT_CAP) return "-999%";
   }
-  if (typeof v === "number") {
-    const d = new Date(Math.round((v - 25569) * 86400 * 1000));
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  }
-  return "";
+  const sign = v > 0 ? "+" : "";
+  return `${sign}${formatPctNum(v)}%`;
 }
 
-function cellYM(v) {
-  const iso = serialToISO(v);
-  if (/^\d{4}-\d{2}/.test(iso)) return iso.slice(0, 7);
-  return "";
+function pctTitle(n) {
+  return pctCapTitle(n);
 }
 
-function isoToBR(iso) {
-  if (!iso || iso.length < 10) return "";
-  const [y, m, d] = iso.slice(0, 10).split("-");
-  return `${d}/${m}/${y}`;
+function chartVariacao(n) {
+  if (n == null || Number.isNaN(n)) return 0;
+  const v = Number(n);
+  if (v > PCT_CAP) return PCT_CAP;
+  if (v < -PCT_CAP) return -PCT_CAP;
+  return v;
 }
 
-function isoToBRShort(iso) {
-  if (!iso || iso.length < 10) return "";
-  const [y, m, d] = iso.slice(0, 10).split("-");
-  return `${d}/${m}/${y.slice(-2)}`;
-}
-
-function ym(iso) {
-  if (/^\d{4}-\d{2}/.test(iso || "")) return iso.slice(0, 7);
-  return cellYM(iso);
-}
-
-function num(v) {
-  if (v == null || v === "") return 0;
-  if (typeof v === "number") return v;
-  let s = String(v).replace("R$", "").replace(/\s/g, "").trim();
-  if (!s) return 0;
-  if (s.includes(",")) {
-    s = s.replace(/\./g, "").replace(",", ".");
-  }
-  const n = Number(s);
-  return Number.isFinite(n) ? n : 0;
-}
-
-function fmtMoneyInput(v) {
-  if (v == null || v === "") return "";
-  const n = typeof v === "number" ? v : num(v);
-  if (!Number.isFinite(n) || n === 0) return n === 0 ? "0,00" : "";
-  return n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
-function truthy(v) {
-  if (v === true || v === 1) return true;
-  if (v === false || v === 0 || v == null || v === "") return false;
-  const s = String(v).trim().toUpperCase();
-  if (s === "FALSE" || s === "FALSO" || s === "NÃO" || s === "NAO" || s === "NO") return false;
-  return s === "TRUE" || s === "VERDADEIRO" || s === "SIM" || s === "PAGO" || s === "RECEBIDO" || s === "✓" || s === "☑";
-}
-
-function receitaRecebida(r) {
-  return truthy(r.pago);
-}
-
-function valorReceitaRecebida(r) {
-  if (!receitaRecebida(r)) return 0;
-  return num(r.realizado) || 0;
-}
-
-function receitasRecebidasTotal() {
-  return monthReceitas().reduce((a, x) => a + valorReceitaRecebida(x), 0);
-}
-
-function colLetter(i) {
-  let n = i + 1;
-  let s = "";
-  while (n > 0) {
-    const r = (n - 1) % 26;
-    s = String.fromCharCode(65 + r) + s;
-    n = Math.floor((n - 1) / 26);
-  }
-  return s;
-}
-
-const DESP_COL = {
-  pago: 0,
-  competencia: 1,
-  categoria: 2,
-  descricao: 3,
-  tipo: 4,
-  vencimento: 5,
-  dataPagamento: 6,
-  prioridade: 7,
-  status: 8,
-  dias: 9,
-  previsto: 10,
-  realizado: 11,
-  pct: 12,
-  diferenca: 13,
-  situacao: 14,
-  formaPagamento: 16,
-  conta: 17,
-  recorrente: 18,
-  parcela: 19,
-  observacoes: 20,
-};
-
-const DATA_PAGAMENTO_HEADERS = new Set([
-  "pagamento",
-  "data pagamento",
-  "data do pagamento",
-  "data pago",
-  "dt pagamento",
-  "dt. pagamento",
-]);
-
-function isFormaPagamentoHeader(k) {
-  return k.includes("forma") && k.includes("pag");
-}
-
-function despColIdx(idx, field) {
-  if (idx?.[field] != null) return idx[field];
-  return DESP_COL[field] ?? null;
-}
-
-function mapHeaders(row) {
-  const aliases = {
-    pago: ["pago?", "pago", "recebido?", "recebido"],
-    competencia: ["competência", "competencia"],
-    categoria: ["categoria", "fonte"],
-    fonte: ["fonte"],
-    descricao: ["descrição", "descricao"],
-    tipo: ["tipo"],
-    vencimento: ["vencimento", "data prevista"],
-    prioridade: ["prioridade"],
-    status: ["status"],
-    dias: ["dias"],
-    previsto: ["previsto"],
-    realizado: ["realizado"],
-    pct: ["%"],
-    diferenca: ["diferença", "diferenca"],
-    situacao: ["situação", "situacao"],
-    dataRecebimento: ["recebimento", "data recebimento", "data do recebimento", "dt recebimento"],
-    formaPagamento: ["forma pagamento", "forma de pagamento", "meio pagamento", "forma"],
-    conta: ["conta"],
-    recorrente: ["recorrente"],
-    parcela: ["parcela"],
-    observacoes: ["observações", "observacoes"],
-    classe: ["classe", "classe (50-30-20)", "classe 50-30-20"],
-    limite: ["limite", "orçamento mensal", "orcamento mensal"],
-    restante: ["restante"],
+function pracaData(d, uf) {
+  const p = d.pracas?.[uf] || {};
+  if (p.variacaoPct !== undefined) return p;
+  const rows = (d.lojas || []).filter((r) => r.uf === uf);
+  const venda = p.venda ?? rows.reduce((s, r) => s + (r.venda || 0), 0);
+  const ant = rows.reduce((s, r) => s + (r.anoAnterior?.venda || 0), 0);
+  const tot = d.totais?.venda || 0;
+  let variacaoPct = null;
+  if (ant >= 100) variacaoPct = Math.round(((venda - ant) / ant) * 1000) / 10;
+  return {
+    venda,
+    pctTotal: tot ? Math.round((venda / tot) * 1000) / 10 : 0,
+    variacaoPct,
   };
-  const idx = {};
-  (row || []).forEach((h, i) => {
-    const k = String(h || "").trim().toLowerCase();
-    if (!k || k === "pagamentos" || isFormaPagamentoHeader(k)) return;
-    if (DATA_PAGAMENTO_HEADERS.has(k)) {
-      idx.dataPagamento = i;
-      return;
-    }
-    for (const [field, names] of Object.entries(aliases)) {
-      if (field === "formaPagamento" && k !== "forma" && !isFormaPagamentoHeader(k)) continue;
-      if (names.includes(k) || (field === "classe" && k.includes("classe"))) idx[field] = i;
-      else if (
-        field === "limite" &&
-        !k.includes("%") &&
-        (k === "limite" || k.includes("orçamento mensal") || k.includes("orcamento mensal"))
-      )
-        idx[field] = i;
-    }
-  });
-  if (idx.dataPagamento == null) idx.dataPagamento = DESP_COL.dataPagamento;
-  return idx;
 }
 
-function waitGoogle() {
-  return new Promise((resolve, reject) => {
-    const t0 = Date.now();
-    const t = setInterval(() => {
-      if (window.google?.accounts?.oauth2) {
-        clearInterval(t);
-        resolve();
-      } else if (Date.now() - t0 > 12000) {
-        clearInterval(t);
-        reject(new Error("Não foi possível carregar o login do Google."));
-      }
-    }, 40);
-  });
+function renderPracaHero(uf, data) {
+  const cls = uf === "MG" ? "kpi-mg" : "kpi-df";
+  return `
+    <div class="kpi ${cls} kpi-praca-tall">
+      <span class="praca-lbl">${uf}:</span>
+      <b>${brl(data.venda)}</b>
+      <small>${pctPlain(data.pctTotal)} do total</small>
+      <small class="praca-var ${varClass(data.variacaoPct)}">Variação ${pct(data.variacaoPct)}</small>
+      <small class="rel-ant">em rel. ano anterior</small>
+    </div>`;
 }
 
-let tokenClient = null;
+function topLojasPorVenda(list, limit = 10) {
+  return [...(list || [])].sort((a, b) => (b.venda || 0) - (a.venda || 0)).slice(0, limit);
+}
 
-async function api(path, options = {}) {
-  const url = `https://sheets.googleapis.com/v4/spreadsheets/${state.spreadsheetId}${path}`;
-  const res = await fetch(url, {
-    ...options,
-    headers: {
-      Authorization: `Bearer ${state.token}`,
-      "Content-Type": "application/json",
-      ...(options.headers || {}),
-    },
-  });
-  if (res.status === 401) {
-    await login(true);
-    return api(path, options);
+function lojaNum(loja) {
+  return parseInt(String(loja).trim(), 10) || 0;
+}
+
+function ufRank(uf) {
+  if (uf === "MG") return 0;
+  if (uf === "DF") return 1;
+  return 2;
+}
+
+function sortLojas(list, mode) {
+  const rows = [...(list || [])];
+  if (mode === "venda") {
+    rows.sort((a, b) => b.venda - a.venda);
+  } else if (mode === "uf-loja") {
+    rows.sort((a, b) => ufRank(a.uf) - ufRank(b.uf) || lojaNum(a.loja) - lojaNum(b.loja));
+  } else if (mode === "uf-venda") {
+    rows.sort((a, b) => ufRank(a.uf) - ufRank(b.uf) || b.venda - a.venda);
+  } else {
+    rows.sort((a, b) => lojaNum(a.loja) - lojaNum(b.loja));
   }
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(data.error?.message || `Erro ${res.status} na planilha`);
+  return rows;
+}
+
+function lojaSortHint(mode) {
+  if (mode === "uf-loja") return "UF · loja";
+  if (mode === "loja") return "loja";
+  return "";
+}
+
+function vendaSortHint(mode) {
+  if (mode === "venda") return "venda ↓";
+  if (mode === "uf-venda") return "UF · venda ↓";
+  return "";
+}
+
+function cycleSortMode(mode) {
+  if (mode === "loja") return "uf-loja";
+  if (mode === "uf-loja") return "uf-venda";
+  return "loja";
+}
+
+function clickVendaSort(mode) {
+  if (mode === "venda") return "uf-venda";
+  return "venda";
+}
+
+function ufClass(uf) {
+  if (uf === "MG") return "uf-mg";
+  if (uf === "DF") return "uf-df";
+  return "";
+}
+
+function displayLojas() {
+  return sortLojas(state.data?.lojas, state.sortMode);
+}
+
+function varClass(n) {
+  if (n == null) return "";
+  return Number(n) >= 0 ? "pos" : "neg";
+}
+
+function showToast(msg) {
+  state.toast = msg;
+  render();
+  setTimeout(() => {
+    state.toast = "";
+    render();
+  }, 2600);
+}
+
+function apiBase() {
+  return String(state.apiUrl || "").trim().replace(/\/+$/, "");
+}
+
+async function apiFetch(path, opts = {}) {
+  const headers = { ...(opts.headers || {}) };
+  if (state.token) headers.Authorization = `Bearer ${state.token}`;
+  if (opts.body && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
+  const res = await fetch(`${apiBase()}${path}`, { ...opts, headers });
+  const text = await res.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { detail: text || res.statusText };
   }
+  if (!res.ok) throw new Error(data.detail || `Erro ${res.status}`);
   return data;
 }
 
-function login(silent) {
-  return new Promise((resolve, reject) => {
-    if (!tokenClient) {
-      reject(new Error("Login do Google ainda não está pronto."));
-      return;
-    }
-    tokenClient.callback = (resp) => {
-      if (resp.error) {
-        reject(new Error(resp.error_description || resp.error));
-        return;
-      }
-      state.token = resp.access_token;
-      resolve(resp);
-    };
-    tokenClient.requestAccessToken({ prompt: silent ? "" : "consent" });
-  });
-}
-
-async function initTokenClient() {
-  await waitGoogle();
-  tokenClient = google.accounts.oauth2.initTokenClient({
-    client_id: state.clientId,
-    scope: SCOPE,
-    callback: () => {},
-  });
-}
-
-async function ensureSession() {
-  await initTokenClient();
-  try {
-    await login(true);
-  } catch {
-    await login(false);
-  }
-  await fetchGoogleProfile();
-}
-
-async function fetchGoogleProfile() {
-  if (!state.token) return;
-  try {
-    const res = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
-      headers: { Authorization: `Bearer ${state.token}` },
-    });
-    if (!res.ok) return;
-    const data = await res.json();
-    const name = data.given_name || String(data.name || "").split(" ")[0] || "";
-    if (name) {
-      state.nome = name;
-      saveConfig({ googleName: name });
-    }
-  } catch (_) {}
-}
-
-function applyStoredConfig() {
-  const cfg = loadConfig();
-  state.clientId = normalizeClientId(cfg.clientId || DEFAULTS.clientId);
-  state.spreadsheetId = cfg.spreadsheetId || extractSpreadsheetId(DEFAULTS.spreadsheetUrl);
-  const spreadsheetUrl = cfg.spreadsheetUrl || DEFAULTS.spreadsheetUrl;
-  saveConfig({
-    clientId: state.clientId,
-    spreadsheetId: state.spreadsheetId,
-    spreadsheetUrl,
-  });
-  if (cfg.googleName) state.nome = cfg.googleName;
-}
-
-function pillClass(status) {
-  const s = String(status || "").toLowerCase();
-  if (s.includes("pago") || s.includes("recebido") || s.includes("orçamento") || s === "economia") return "p-ok";
-  if (s.includes("breve") || s.includes("atenção")) return "p-warn";
-  if (s.includes("atras") || s.includes("estour")) return "p-bad";
-  return "p-wait";
-}
-
-function sameMonth(iso, vencimento) {
-  const want = `${state.ano}-${String(state.mesNum).padStart(2, "0")}`;
-  const got = cellYM(iso) || ym(iso);
-  if (got === want) return true;
-  if (!got && vencimento) return cellYM(vencimento) === want;
-  return false;
-}
-
-function inWorkMonth(d) {
-  const start = state.mesStart?.slice(0, 10);
-  const end = state.mesEnd?.slice(0, 10);
-  const comp = d.competencia?.slice(0, 10);
-  const venc = d.vencimento?.slice(0, 10);
-  if (start && end && start.length === 10 && end.length === 10) {
-    if (comp && comp >= start && comp <= end) return true;
-    if (venc && venc >= start && venc <= end) return true;
-  }
-  if (d.competenciaRaw) {
-    const raw = String(d.competenciaRaw).toLowerCase();
-    const mon = MONTHS[state.mesNum - 1]?.slice(0, 3).toLowerCase();
-    if (mon && raw.includes(mon) && raw.includes(String(state.ano))) return true;
-  }
-  return sameMonth(d.competencia, d.vencimento);
-}
-
-function isSummaryRow(descricao, joined) {
-  const d = descricao.toLowerCase();
-  const j = joined.toLowerCase();
-  return j.includes("total geral") || j.includes("subtotal") || d.startsWith("total") || j.includes("soma ");
-}
-
-function normCat(s) {
-  return String(s || "")
-    .trim()
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "");
-}
-
-function listasCatalogStart(listas) {
-  for (let i = 0; i < listas.length; i++) {
-    const row = listas[i] || [];
-    const joined = row.map((x) => String(x || "").toLowerCase()).join("|");
-    if (joined.includes("categoria") && (joined.includes("classe") || joined.includes("50-30") || joined.includes("503020"))) {
-      return i + 1;
-    }
-  }
-  return listas.length ? 1 : 0;
-}
-
-function parseListasCatalog(listas) {
-  const classes = {};
-  const limites = {};
-  const start = listasCatalogStart(listas);
-  for (let i = start; i < listas.length; i++) {
-    const cat = String(listas[i][0] || "").trim();
-    const cls = String(listas[i][1] || "").trim();
-    if (!cat) continue;
-    const nk = normCat(cat);
-    if (nk === "categoria" || nk === "categorias") continue;
-    const cl = cls.toLowerCase();
-    if (cls && !cl.includes("classe") && !cl.includes("50-30")) {
-      classes[cat] = cls;
-      classes[nk] = cls;
-    }
-    if (listas[i][3] != null && String(listas[i][3]).trim() !== "") {
-      const lim = num(listas[i][3]);
-      limites[cat] = lim;
-      limites[nk] = lim;
-    }
-  }
-  return { classes, limites };
-}
-
-function lookupClasse(categoria) {
-  const c = String(categoria || "").trim();
-  if (!c) return "";
-  const map = state.listas?.classesPorCategoria || {};
-  return map[c] || map[normCat(c)] || "";
-}
-
-function classeMatches(classe, partial) {
-  const c = normCat(classe);
-  const p = normCat(partial);
-  if (p.startsWith("poupan")) return c.includes("poupan") || c.includes("invest");
-  if (p.startsWith("necess")) return c.includes("necess");
-  if (p.startsWith("desej")) return c.includes("desej");
-  return c.includes(p);
-}
-
-function orcamentoClasse(o) {
-  return String(o?.classe || lookupClasse(o?.categoria) || "").trim();
-}
-
-function lookupLimite(categoria) {
-  const c = String(categoria || "").trim();
-  if (!c) return 0;
-  const map = state.listas?.limitesPorCategoria || {};
-  return num(map[c] ?? map[normCat(c)] ?? 0);
-}
-
-function hydrateOrcamentoMeta() {
-  state.orcamento = state.orcamento.map((o) => ({
-    ...o,
-    classe: orcamentoClasse(o),
-    limite: num(o.limite) || lookupLimite(o.categoria),
-  }));
-}
-
-function parseTables(batch) {
-  const byRange = {};
-  (batch.valueRanges || []).forEach((vr) => {
-    byRange[vr.range.split("!")[0].replace(/'/g, "")] = vr.values || [];
-  });
-
-  const cfg = byRange.Config || [];
-  const cfgName = String(cfg[0]?.[0] || "").trim();
-  const googleName = loadConfig().googleName || state.nome || "";
-  state.nome =
-    googleName ||
-    (cfgName && cfgName.toLowerCase() !== "meu nome" ? cfgName : "Olá");
-  state.ano = Number(cfg[1]?.[0] || new Date().getFullYear());
-  state.mes = String(cfg[2]?.[0] || MONTHS[new Date().getMonth()]);
-  const idxMes = MONTHS.findIndex((m) => m.toLowerCase() === state.mes.toLowerCase());
-  state.mesNum = Number(String(cfg[3]?.[0] ?? "").replace(",", ".")) || (idxMes >= 0 ? idxMes + 1 : new Date().getMonth() + 1);
-  state.mesStart = serialToISO(cfg[5]?.[0]);
-  state.mesEnd = serialToISO(cfg[6]?.[0]);
-  state.saldoInicial = num(cfg[8]?.[0]);
-  state.metaPoupanca = num(cfg[9]?.[0]) || 0.2;
-
-  const listas = byRange.Listas || [];
-  const pickCol = (c, from = 1) =>
-    listas.slice(from).map((r) => r[c]).filter((v) => v != null && String(v).trim() !== "");
-  const catalog = parseListasCatalog(listas);
-  state.listas = {
-    categorias: pickCol(0),
-    classesPorCategoria: catalog.classes,
-    limitesPorCategoria: catalog.limites,
-    tipos: pickCol(6).length ? pickCol(6) : ["Fixo", "Variável", "Parcelado", "Assinatura"],
-    prioridades: pickCol(7).length ? pickCol(7) : ["Alta", "Média", "Baixa"],
-    pagamentos: pickCol(8).length ? pickCol(8) : ["Pix", "Boleto", "Crédito", "Débito"],
-    contas: pickCol(9).length ? pickCol(9) : ["Nubank", "Itaú", "Carteira"],
-    fontes: pickCol(11).length ? pickCol(11) : ["Salário", "Extra", "Rendimentos"],
-  };
-
-  function parseSheet(values, kind) {
-    let headerRow = 0;
-    for (let i = 0; i < Math.min(values.length, 15); i++) {
-      const a = String(values[i][0] || "");
-      if (a.includes("PESQUISA")) continue;
-      const joined = values[i].map((x) => String(x || "")).join(" ").toLowerCase();
-      const hasPago = a.toLowerCase().includes("pago") || joined.includes("pago");
-      const hasRecebido = a.toLowerCase().includes("recebido") || joined.includes("recebido");
-      const hasDesc = joined.includes("descrição") || joined.includes("descricao");
-      const hasComp = joined.includes("competência") || joined.includes("competencia");
-      const hasPrev = joined.includes("previsto");
-      const hasFonte = joined.includes("fonte");
-      if (
-        kind === "orcamento" &&
-        joined.includes("categoria") &&
-        (joined.includes("limite") || joined.includes("classe") || joined.includes("realizado"))
-      ) {
-        headerRow = i;
-        break;
-      }
-      if (kind === "receita" && (hasRecebido || hasComp) && (hasDesc || hasPrev || hasFonte)) {
-        headerRow = i;
-        break;
-      }
-      if (kind === "despesa" && hasPago && (hasDesc || hasComp || hasPrev)) {
-        headerRow = i;
-        break;
-      }
-    }
-    const idx = mapHeaders(values[headerRow] || []);
-    const rows = [];
-    for (let i = headerRow + 1; i < values.length; i++) {
-      const r = values[i] || [];
-      const marker = String(r[0] || "");
-      const joined = r.map((x) => String(x || "")).join(" ");
-      if (marker.includes("PESQUISA")) continue;
-      const descricao = String(r[idx.descricao] ?? "");
-      const fonte = kind === "receita" ? String(r[idx.fonte] ?? r[idx.categoria] ?? r[2] ?? "") : "";
-      const categoria = kind === "receita" ? fonte : String(r[idx.categoria] ?? (kind === "orcamento" ? r[1] : "") ?? "");
-      if (kind !== "orcamento" && !descricao && !categoria && !fonte) continue;
-      if (kind === "orcamento" && !isOrcamentoDataRow(categoria)) continue;
-      if (kind === "despesa" && isSummaryRow(descricao, joined)) continue;
-      const compRaw = idx.competencia != null ? r[idx.competencia] : "";
-      rows.push({
-        sheetRow: i + 1,
-        pago: truthy(kind === "despesa" ? (r[idx.pago] ?? r[0]) : r[idx.pago]),
-        competenciaRaw: compRaw,
-        competencia: serialToISO(compRaw),
-        categoria: categoria || fonte,
-        descricao,
-        tipo: String(r[idx.tipo] || ""),
-        vencimento: serialToISO(kind === "despesa" ? (r[idx.vencimento] ?? r[5]) : r[idx.vencimento]),
-        prioridade: String(r[idx.prioridade] || ""),
-        status: String(r[idx.status] || ""),
-        previsto: num(kind === "despesa" ? (r[idx.previsto] ?? r[10]) : r[idx.previsto]),
-        realizado: num(kind === "despesa" ? (r[idx.realizado] ?? r[11]) : r[idx.realizado]),
-        pct: num(r[idx.pct]),
-        situacao: String(r[idx.situacao] || ""),
-        dataPagamento: serialToISO(kind === "despesa" ? (r[idx.dataPagamento] ?? r[6]) : r[idx.dataPagamento]),
-        dataRecebimento: serialToISO(r[idx.dataRecebimento]),
-        formaPagamento: String(r[idx.formaPagamento] || ""),
-        conta: String(r[idx.conta] || ""),
-        recorrente: String(r[idx.recorrente] || "Não"),
-        parcela: String(r[idx.parcela] || ""),
-        observacoes: String(r[idx.observacoes] || ""),
-        classe: kind === "orcamento" ? String(r[idx.classe] ?? r[2] ?? "").trim() : String(r[idx.classe] || ""),
-        limite: kind === "orcamento" ? num(r[3] ?? r[idx.limite]) : num(r[idx.limite]),
-        restante: num(r[idx.restante]),
-        idx,
-      });
-    }
-    return { headerRow, idx, rows };
-  }
-
-  const d = parseSheet(byRange.Despesas || [], "despesa");
-  const rec = parseSheet(byRange.Receitas || [], "receita");
-  const orc = parseSheet(byRange.Orçamento || byRange.Orcamento || [], "orcamento");
-  state._despMeta = d;
-  state._recMeta = rec;
-  state.despesas = d.rows;
-  state.receitas = rec.rows;
-  state.orcamento = orc.rows;
-  hydrateOrcamentoMeta();
-  enrichOrcamentoFromDespesas();
-  hydrateOrcamentoMeta();
-}
-
-function enrichOrcamentoFromDespesas() {
-  const totals = {};
-  state.despesas.forEach((d) => {
-    if (!inWorkMonth(d)) return;
-    const cat = d.categoria || "Outros";
-    if (!totals[cat]) totals[cat] = { previsto: 0, realizado: 0 };
-    totals[cat].previsto += d.previsto;
-    totals[cat].realizado += d.pago ? (num(d.realizado) || 0) : 0;
-  });
-  if (!Object.keys(totals).length) return;
-  const seen = new Set(state.orcamento.map((o) => o.categoria));
-  state.orcamento = state.orcamento.map((o) => {
-    const t = totals[o.categoria];
-    if (!t) return o;
-    const limite = o.limite || 0;
-    const uso = limite ? t.realizado / limite : 0;
-    return {
-      ...o,
-      previsto: t.previsto,
-      realizado: t.realizado,
-      situacao: o.situacao || (uso > 1 ? "estourou" : uso >= 0.9 ? "atenção" : "no limite"),
-    };
-  });
-  for (const [categoria, t] of Object.entries(totals)) {
-    if (seen.has(categoria)) continue;
-    state.orcamento.push({
-      sheetRow: 0,
-      categoria,
-      classe: lookupClasse(categoria),
-      limite: lookupLimite(categoria),
-      previsto: t.previsto,
-      realizado: t.realizado,
-      situacao: "sem limite",
-      idx: {},
-    });
-  }
-}
-
-async function batchGetRanges(ranges, render = "FORMATTED_VALUE") {
-  const q = ranges.map((r) => `ranges=${encodeURIComponent(r)}`).join("&");
-  return api(`/values:batchGet?${q}&valueRenderOption=${render}`);
-}
-
-/** Lê Fluxo coluna a coluna — evita deslocar C/D quando células vazias são omitidas pela API. */
-async function loadFluxoSheet() {
-  const ranges = [
-    "Fluxo de caixa!A5:A35",
-    "Fluxo de caixa!B5:B35",
-    "Fluxo de caixa!C5:C35",
-    "Fluxo de caixa!D5:D35",
-    "Fluxo de caixa!E5:E35",
-    "Fluxo de caixa!F5:F35",
-  ];
-  const data = await batchGetRanges(ranges);
-  const cols = (data.valueRanges || []).map((vr) => vr.values || []);
-  const maxLen = Math.max(0, ...cols.map((c) => c.length));
-  const rows = [];
-  for (let i = 0; i < maxLen; i++) {
-    rows.push([
-      cols[0][i]?.[0],
-      cols[1][i]?.[0],
-      cols[2][i]?.[0],
-      cols[3][i]?.[0],
-      cols[4][i]?.[0],
-      cols[5][i]?.[0],
-    ]);
-  }
-  parseFluxoSheet(rows);
-}
-
-async function refresh() {
-  state.loading = true;
+async function doLogin() {
   state.error = "";
-  state.hint = "";
+  state.loading = true;
   render();
   try {
-    const data = await batchGetRanges([
-      "Config!B4:B13",
-      "Despesas!A1:T400",
-      "Receitas!A1:L200",
-      "Listas!A4:L50",
-    ]);
-    try {
-      const orc = await batchGetRanges(["Orçamento!A1:J30"]);
-      data.valueRanges = data.valueRanges.concat(orc.valueRanges);
-    } catch {
-      try {
-        const orc = await batchGetRanges(["Orcamento!A1:J30"]);
-        data.valueRanges = data.valueRanges.concat(orc.valueRanges);
-      } catch (_) {}
-    }
-    parseTables(data);
-    try {
-      await loadFluxoSheet();
-    } catch {
-      state.fluxoDias = [];
-      state.fluxoFromSheet = false;
-      state.ultimaConsolidacao = null;
-    }
-    const monthCount = monthDespesas().length;
-    if (!state.despesas.length) {
-      state.hint = "Nenhuma linha na aba Despesas. A planilha precisa das abas Config, Despesas, Receitas e Listas (modelo Minhas Finanças).";
-    } else if (!monthCount) {
-      state.hint = `${state.despesas.length} linha(s) na planilha, ${monthCount} no mês ${state.mes}/${state.ano}. Confira Config (B5/B6) e Competência ou Vencimento.`;
-    }
-  } catch (err) {
-    state.error = err.message;
+    const data = await apiFetch("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ username: state.loginUser, password: state.loginPass }),
+    });
+    state.token = data.token;
+    state.usuario = data.usuario;
+    saveConfig({ apiUrl: state.apiUrl, token: data.token, usuario: data.usuario });
+    state.sheetOpen = false;
+    state.loginPass = "";
+    showToast(`Conectado como ${data.usuario}`);
+    await loadDesempenho();
+  } catch (e) {
+    state.error = e.message;
   } finally {
     state.loading = false;
     render();
   }
 }
 
-function monthDespesas() {
-  return state.despesas.filter((d) => inWorkMonth(d));
-}
-
-function monthReceitas() {
-  return state.receitas.filter((d) => inWorkMonth(d));
-}
-
-function isOrcamentoDataRow(categoria) {
-  const c = String(categoria || "").trim();
-  if (!c) return false;
-  const low = c.toLowerCase();
-  if (low === "categoria" || low === "categorias") return false;
-  if (c.toUpperCase() === "TOTAL") return false;
-  return true;
-}
-
-function categoriaClasse(cat) {
-  const fromListas = lookupClasse(cat);
-  if (fromListas) return fromListas;
-  const nk = normCat(cat);
-  const o = state.orcamento.find((x) => normCat(x.categoria) === nk);
-  return orcamentoClasse(o);
-}
-
-/** Igual ao Painel da planilha: soma Realizado do Orçamento por classe; fallback nas despesas pagas. */
-function gastoPorClasse503020(partial) {
-  let fromOrc = 0;
-  for (const o of state.orcamento) {
-    if (!isOrcamentoDataRow(o.categoria)) continue;
-    const cls = orcamentoClasse(o);
-    if (!classeMatches(cls, partial)) continue;
-    fromOrc += num(o.realizado) || 0;
-  }
-  if (fromOrc > 0) return fromOrc;
-  return monthDespesas()
-    .filter((d) => d.pago && classeMatches(categoriaClasse(d.categoria), partial))
-    .reduce((a, x) => a + (num(x.realizado) || 0), 0);
-}
-
-function despesasPagasTotal() {
-  return monthDespesas()
-    .filter((d) => d.pago)
-    .reduce((a, x) => a + (num(x.realizado) || 0), 0);
-}
-
-function metrics() {
-  const ds = monthDespesas();
-  const receitas = receitasRecebidasTotal();
-  const previsto = ds.reduce((a, x) => a + x.previsto, 0);
-  const realizado = despesasPagasTotal();
-  const pagar = ds.filter((x) => !x.pago).reduce((a, x) => a + x.previsto, 0);
-  const atrasadas = ds.filter((x) => String(x.status).toLowerCase().includes("atras")).length;
-  const breve = ds.filter((x) => String(x.status).toLowerCase().includes("breve")).length;
-  const nec = gastoPorClasse503020("necessidade");
-  const des = gastoPorClasse503020("desejo");
-  const pou = gastoPorClasse503020("poupan");
-  const limite = state.orcamento
-    .filter((o) => isOrcamentoDataRow(o.categoria))
-    .reduce((a, x) => a + (x.limite || 0), 0);
-  const saldo = receitas - realizado;
-  const taxaPoupancaP = receitas ? (saldo / receitas) * 100 : 0;
-  const metaPoupancaP = (Number(state.metaPoupanca) || 0.2) * 100;
-  return {
-    receitas,
-    previsto,
-    realizado,
-    saldo,
-    pagar,
-    sobrando: saldo - pagar,
-    economia: previsto - realizado,
-    atrasadas,
-    breve,
-    uso: previsto ? realizado / previsto : 0,
-    taxaPoupancaP,
-    metaPoupancaP,
-    nec,
-    des,
-    pou,
-    necP: receitas ? (nec / receitas) * 100 : 0,
-    desP: receitas ? (des / receitas) * 100 : 0,
-    pouP: receitas ? (pou / receitas) * 100 : 0,
-    limite,
-    usoLimite: limite ? realizado / limite : 0,
-  };
-}
-
-function despValor(d) {
-  return num(d.pago ? d.realizado || d.previsto : d.previsto);
-}
-
-function filteredDespesasBase() {
-  let list = monthDespesas();
-  if (state.filtro === "pagar") list = list.filter((d) => !d.pago);
-  if (state.filtro === "atrasadas") list = list.filter((d) => String(d.status).toLowerCase().includes("atras"));
-  return list;
-}
-
-function findSearchHitRow(list, q) {
-  const t = String(q || "").trim();
-  if (!t) return null;
-
-  if (isValueQuery(t)) {
-    const target = num(t);
-    if (!target) return null;
-    let best = null;
-    let bestVal = Infinity;
-    for (const d of list) {
-      const v = despValor(d);
-      if (v >= target && v < bestVal) {
-        best = d;
-        bestVal = v;
-      }
-    }
-    return best?.sheetRow ?? null;
-  }
-
-  const qDate = parseQueryDate(t);
-  if (qDate) {
-    let best = null;
-    let bestDate = null;
-    for (const d of list) {
-      const v = d.vencimento?.slice(0, 10) || "";
-      if (v && v >= qDate && (!bestDate || v < bestDate)) {
-        best = d;
-        bestDate = v;
-      }
-    }
-    return best?.sheetRow ?? null;
-  }
-
-  return null;
-}
-
-function updateSearchHit() {
-  const q = state.query.trim();
-  if (state.tab !== "despesas" || !q || (!isValueQuery(q) && !parseQueryDate(q))) {
-    state.searchHitRow = null;
+async function loadDesempenho() {
+  if (!state.token) {
+    state.sheetOpen = true;
+    render();
     return;
   }
-  state.searchHitRow = findSearchHitRow(filteredDespesasBase(), q);
-}
-
-function despPgtoDate(d) {
-  if (!d.pago) return "";
-  return d.dataPagamento?.slice(0, 10) || d.vencimento?.slice(0, 10) || "";
-}
-
-function recRecebDate(r) {
-  if (!r.pago) return "";
-  return r.dataRecebimento?.slice(0, 10) || r.vencimento?.slice(0, 10) || "";
-}
-
-function fluxoCellNum(v) {
-  if (v == null || String(v).trim() === "") return null;
-  return num(v);
-}
-
-function parseFluxoSheet(values) {
-  state.fluxoDias = [];
-  state.fluxoFromSheet = false;
-  for (let i = 0; i < (values || []).length; i++) {
-    const r = values[i] || [];
-    const dia = serialToISO(r[0]);
-    if (!dia) continue;
-    const saldoFinal = fluxoCellNum(r[4]);
-    state.fluxoDias.push({
-      sheetRow: 5 + i,
-      dia,
-      saldoInicial: fluxoCellNum(r[1]),
-      despesas: fluxoCellNum(r[2]),
-      receitas: fluxoCellNum(r[3]),
-      saldoFinal,
-      consolidado: truthy(r[5]),
+  state.loading = true;
+  state.error = "";
+  render();
+  try {
+    const q = new URLSearchParams({
+      inicio: state.inicio,
+      fim: state.fim,
     });
+    state.data = await apiFetch(`/api/desempenho?${q}`);
+    state.sortMode = "loja";
+    renderCharts();
+  } catch (e) {
+    state.error = e.message;
+    state.data = null;
+  } finally {
+    state.loading = false;
+    render();
   }
-  state.fluxoDias.sort((a, b) => a.dia.localeCompare(b.dia));
-  state.fluxoFromSheet = state.fluxoDias.some((x) => x.saldoFinal != null);
-  state.ultimaConsolidacao = null;
-  for (const row of state.fluxoDias) {
-    if (!row.consolidado) break;
-    state.ultimaConsolidacao = row.dia;
-  }
 }
 
-function isDiaConsolidado(isoDate) {
-  const u = state.ultimaConsolidacao;
-  if (!u || !isoDate) return false;
-  return isoDate.slice(0, 10) <= u.slice(0, 10);
-}
-
-function validateDataMovimento(isoDate, label = "pagamento/recebimento") {
-  if (!isoDate) return `Informe a data de ${label}.`;
-  if (isDiaConsolidado(isoDate)) {
-    const ate = isoToBRShort(state.ultimaConsolidacao);
-    return `Este dia já foi consolidado (até ${ate}). Não é possível alterar.`;
-  }
-  return null;
-}
-
-function despesaDataPagamento(fOrRow) {
-  const pgto = fOrRow.dataPagamento?.slice(0, 10) || "";
-  const venc = fOrRow.vencimento?.slice(0, 10) || "";
-  return pgto || venc || "";
-}
-
-function validatePagoRecebido(f, kind) {
-  if (!f.pago) return null;
-  if (kind === "receita") {
-    const dt = f.dataRecebimento || f.vencimento;
-    return validateDataMovimento(dt, "recebimento");
-  }
-  const dt = despesaDataPagamento(f);
-  if (!dt) return "Informe o vencimento ou a data de pagamento.";
-  return validateDataMovimento(dt, "pagamento");
-}
-
-/** Data da receita no fluxo — igual à planilha: Data prevista (col E). */
-function fluxoRecDate(r) {
-  if (!receitaRecebida(r)) return "";
-  return r.vencimento?.slice(0, 10) || r.dataRecebimento?.slice(0, 10) || "";
-}
-
-function fluxoCaixaComputed() {
-  const start = state.mesStart?.slice(0, 10);
-  const end = state.mesEnd?.slice(0, 10);
-  if (!start || !end) return [];
-  const saldo0 = Number(state.saldoInicial) || 0;
-  const days = [];
-  let d = new Date(`${start}T12:00:00`);
-  const endD = new Date(`${end}T12:00:00`);
-  while (d <= endD) {
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    const dd = String(d.getDate()).padStart(2, "0");
-    days.push(`${y}-${m}-${dd}`);
-    d.setDate(d.getDate() + 1);
-  }
-  let prevFinal = saldo0;
-  return days.map((day, i) => {
-    const despesas = state.despesas
-      .filter((x) => x.pago && despPgtoDate(x) === day)
-      .reduce((a, x) => a + (num(x.realizado) || 0), 0);
-    const receitas = state.receitas
-      .filter((x) => receitaRecebida(x) && fluxoRecDate(x) === day)
-      .reduce((a, x) => a + valorReceitaRecebida(x), 0);
-    const saldoInicial = i === 0 ? saldo0 : prevFinal;
-    const saldoFinal = saldoInicial - despesas + receitas;
-    prevFinal = saldoFinal;
-    return { dia: day, saldoInicial, despesas, receitas, saldoFinal };
+function destroyCharts() {
+  Object.keys(state.charts).forEach((k) => {
+    if (state.charts[k]) {
+      state.charts[k].destroy();
+      state.charts[k] = null;
+    }
   });
 }
 
-function fluxoRows() {
-  const today = todayISO();
-  const computed = fluxoCaixaComputed();
-  const compMap = Object.fromEntries(computed.map((r) => [r.dia, r]));
+function renderCharts() {
+  destroyCharts();
+  if (!state.data || !window.Chart) return;
+  const top10 = topLojasPorVenda(state.data.lojas, 10);
+  const lojas = displayLojas();
+  const labelsTop = top10.map((r) => r.loja);
+  const vendasTop = top10.map((r) => r.venda);
+  const labelsVar = lojas.map((r) => r.loja);
+  const variacoes = lojas.map((r) => chartVariacao(r.variacaoPct));
 
-  if (state.fluxoFromSheet && state.fluxoDias.length) {
-    return state.fluxoDias
-      .filter((r) => r.dia <= today && r.saldoFinal != null)
-      .map((r) => {
-        const comp = compMap[r.dia];
-        const despesas = num(r.despesas) || num(comp?.despesas) || 0;
-        const receitas = num(r.receitas) || num(comp?.receitas) || 0;
-        const saldoInicial = num(r.saldoInicial ?? comp?.saldoInicial ?? state.saldoInicial);
-        const saldoFinal = num(r.saldoFinal ?? comp?.saldoFinal ?? saldoInicial - despesas + receitas);
-        return { dia: r.dia, saldoInicial, despesas, receitas, saldoFinal };
-      });
-  }
-  return computed.filter((r) => r.dia <= today);
-}
+  const cv1 = document.getElementById("chart-vendas");
+  const cv2 = document.getElementById("chart-variacao");
+  if (!cv1 || !cv2) return;
 
-function despSubline(d) {
-  const parts = [];
-  if (d.vencimento) parts.push(`vence ${isoToBRShort(d.vencimento)}`);
-  if (d.pago) {
-    const pg = despPgtoDate(d);
-    if (pg) parts.push(`pgto ${isoToBRShort(pg)}`);
-  }
-  if (!parts.length && d.tipo) parts.push(esc(d.tipo));
-  return `${esc(d.categoria)}${parts.length ? " · " + parts.join(" · ") : ""}`;
-}
-
-function isValueQuery(q) {
-  const t = String(q || "").trim();
-  if (!t || !/\d/.test(t)) return false;
-  return /^[\d.,\s]+$/.test(t);
-}
-
-function parseQueryDate(q) {
-  const m = String(q || "")
-    .trim()
-    .match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
-  if (!m) return null;
-  let y = Number(m[3]);
-  if (m[3].length === 2) y = 2000 + y;
-  return `${y}-${String(Number(m[2])).padStart(2, "0")}-${String(Number(m[1])).padStart(2, "0")}`;
-}
-
-function compareDataValorDesc(va, vb, a, b) {
-  if (!va && !vb) return despValor(b) - despValor(a);
-  if (!va) return 1;
-  if (!vb) return -1;
-  const byDate = vb.localeCompare(va);
-  if (byDate !== 0) return byDate;
-  return despValor(b) - despValor(a);
-}
-
-function sortedDespesas() {
-  let list = filteredDespesasBase();
-  const q = state.query.trim();
-
-  if (q && !isValueQuery(q) && !parseQueryDate(q)) {
-    const ql = q.toLowerCase();
-    list = list.filter(
-      (d) =>
-        String(d.descricao).toLowerCase().includes(ql) ||
-        String(d.categoria).toLowerCase().includes(ql)
-    );
+  const varBox = cv2.parentElement;
+  if (varBox) {
+    varBox.style.height = `${Math.max(480, lojas.length * 38 + 28)}px`;
   }
 
-  const sortMode = state.despSort || "vencimento";
-  if (sortMode === "valor") {
-    list.sort((a, b) => {
-      const d = despValor(a) - despValor(b);
-      return d !== 0 ? d : a.sheetRow - b.sheetRow;
-    });
-  } else if (sortMode === "pgto") {
-    list.sort((a, b) => {
-      const d = compareDataValorDesc(despPgtoDate(a), despPgtoDate(b), a, b);
-      return d !== 0 ? d : a.sheetRow - b.sheetRow;
-    });
-  } else {
-    list.sort((a, b) => {
-      const d = compareDataValorDesc(
-        a.vencimento?.slice(0, 10) || "",
-        b.vencimento?.slice(0, 10) || "",
-        a,
-        b
-      );
-      return d !== 0 ? d : a.sheetRow - b.sheetRow;
-    });
-  }
-  return list;
+  state.charts.vendas = new Chart(cv1, {
+    type: "bar",
+    data: {
+      labels: labelsTop,
+      datasets: [{
+        label: "Venda",
+        data: vendasTop,
+        backgroundColor: top10.map((r) => (r.uf === "MG" ? "#d97706" : r.uf === "DF" ? "#0284c7" : "#0f766e")),
+        borderRadius: 8,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        y: {
+          ticks: {
+            callback: (v) => (v >= 1e6 ? `${(v / 1e6).toFixed(1)}M` : v),
+          },
+        },
+      },
+    },
+  });
+
+  state.charts.variacao = new Chart(cv2, {
+    type: "bar",
+    data: {
+      labels: labelsVar,
+      datasets: [{
+        label: "Variação %",
+        data: variacoes,
+        backgroundColor: variacoes.map((v) => (v >= 0 ? "#059669" : "#e11d48")),
+        borderRadius: 6,
+        barPercentage: 0.92,
+        categoryPercentage: 0.92,
+      }],
+    },
+    options: {
+      indexAxis: "y",
+      responsive: true,
+      maintainAspectRatio: false,
+      layout: { padding: { right: 8 } },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              const raw = lojas[ctx.dataIndex]?.variacaoPct;
+              return raw == null ? "—" : pct(raw, { full: true });
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          ticks: { font: { size: 10 } },
+        },
+        y: {
+          ticks: {
+            autoSkip: false,
+            font: { size: 11, weight: "600" },
+          },
+        },
+      },
+    },
+  });
 }
 
-function receitasMetrics() {
-  const rs = monthReceitas();
-  return {
-    previsto: rs.reduce((a, x) => a + x.previsto, 0),
-    realizado: receitasRecebidasTotal(),
-    atrasadas: rs.filter((x) => String(x.status).toLowerCase().includes("atras")).length,
-  };
+function renderSetup() {
+  const auto = inferredApiUrl();
+  const apiBlock = auto
+    ? `<p class="setup-hint">Servidor: <strong>${esc(auto)}</strong></p>`
+    : `
+      <div class="field" style="margin-top:18px">
+        <label>URL da API</label>
+        <input id="api-url" type="url" placeholder="http://HDFATBOY:8080" value="${esc(state.apiUrl)}" />
+      </div>`;
+  return `
+    <div class="setup">
+      <h1>Esatto!</h1>
+      <p>Faça login com seu usuário Windows do servidor HDFATBOY.</p>
+      ${apiBlock}
+      <div class="field" style="margin-top:18px">
+        <label>Usuário Windows</label>
+        <input id="login-user" type="text" autocomplete="username" value="${esc(state.loginUser)}" />
+      </div>
+      <div class="field">
+        <label>Senha</label>
+        <input id="login-pass" type="password" autocomplete="current-password" />
+      </div>
+      ${state.error ? `<p class="error">${esc(state.error)}</p>` : ""}
+      <button class="save" id="btn-login" ${state.loading ? "disabled" : ""}>Entrar</button>
+    </div>`;
+}
+
+function renderDesempenho() {
+  const d = state.data;
+  if (!d) {
+    return `<p class="empty">Defina o período e toque em <strong>Atualizar</strong>.</p>`;
+  }
+  const lojas = displayLojas();
+  const rows = lojas
+    .map(
+      (r) => `
+      <tr>
+        <td class="${ufClass(r.uf)}">${esc(r.loja)}</td>
+        <td class="col-money">${brl(r.venda)}</td>
+        <td class="col-pct"${pctCapTitle(r.pctBruto) ? ` title="${esc(pctCapTitle(r.pctBruto))}"` : ""}>${pctPlain(r.pctBruto)}</td>
+        <td class="col-money">${brl(r.anoAnterior?.venda)}</td>
+        <td class="col-pct"${pctCapTitle(r.anoAnterior?.pctBruto) ? ` title="${esc(pctCapTitle(r.anoAnterior?.pctBruto))}"` : ""}>${pctPlain(r.anoAnterior?.pctBruto)}</td>
+        <td class="col-var ${varClass(r.variacaoPct)}"${pctTitle(r.variacaoPct) ? ` title="${esc(pctTitle(r.variacaoPct))}"` : ""}>${pct(r.variacaoPct)}</td>
+      </tr>`
+    )
+    .join("");
+  const t = d.totais || {};
+  const mg = pracaData(d, "MG");
+  const df = pracaData(d, "DF");
+  return `
+    <div class="hero hero-tall">
+      <div class="lbl">Venda total · ${esc(d.periodo?.inicio)} a ${esc(d.periodo?.fim)}</div>
+      <div class="val">${brl(t.venda)}</div>
+      <div class="sub">% bruto ${pctPlain(t.pctBruto)} · Variação ${pct(t.variacaoPct)} vs ano anterior</div>
+      <div class="grid2 pracas">
+        ${renderPracaHero("MG", mg)}
+        ${renderPracaHero("DF", df)}
+      </div>
+      <div class="grid2">
+        <div class="kpi"><span>Ano anterior</span><b>${brl(t.anoAnterior?.venda)}</b></div>
+        <div class="kpi"><span>% bruto ant.</span><b>${pctPlain(t.anoAnterior?.pctBruto)}</b></div>
+      </div>
+    </div>
+    <div class="table-wrap table-wrap-tight">
+      <table class="lojas-table">
+        <colgroup>
+          <col class="c-loja" />
+          <col class="c-venda" />
+          <col class="c-pct" />
+          <col class="c-venda" />
+          <col class="c-pct" />
+          <col class="c-var" />
+        </colgroup>
+        <thead>
+          <tr>
+            <th class="th-sort ${["loja", "uf-loja"].includes(state.sortMode) ? "th-sort-on" : ""}" id="th-loja" title="Toque para alterar a ordenação">
+              Loja
+              <span class="hint">${esc(lojaSortHint(state.sortMode))}</span>
+            </th>
+            <th class="th-sort ${["venda", "uf-venda"].includes(state.sortMode) ? "th-sort-on" : ""}" id="th-venda" title="Toque para ordenar por venda">
+              Venda
+              <span class="hint">${esc(vendaSortHint(state.sortMode))}</span>
+            </th>
+            <th class="col-pct">% Bruto</th>
+            <th>Venda ant.</th>
+            <th class="col-pct">% ant.</th>
+            <th class="col-var">Variação</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows}
+        </tbody>
+      </table>
+    </div>
+    <div class="section">Gráficos</div>
+    <div class="chart-card">
+      <h3>10 melhores lojas</h3>
+      <div class="chart-box"><canvas id="chart-vendas"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <h3>Variação vs ano anterior</h3>
+      <div class="chart-box chart-box-variacao"><canvas id="chart-variacao"></canvas></div>
+    </div>`;
 }
 
 function isAndroid() {
@@ -1148,6 +571,180 @@ function isMobile() {
 
 function isIOS() {
   return /iPhone|iPad|iPod/i.test(navigator.userAgent);
+}
+
+function hexToBytes(hex) {
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i += 1) out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  return out;
+}
+
+function getOrCreateTotpSecretHex() {
+  let hex = localStorage.getItem(TOTP_SECRET_KEY);
+  if (!hex || hex.length < 32) {
+    const arr = new Uint8Array(20);
+    crypto.getRandomValues(arr);
+    hex = Array.from(arr, (b) => b.toString(16).padStart(2, "0")).join("");
+    localStorage.setItem(TOTP_SECRET_KEY, hex);
+  }
+  return hex;
+}
+
+async function computeTotp(secretBytes, step = TOTP_STEP) {
+  const counter = Math.floor(Date.now() / 1000 / step);
+  const counterBytes = new Uint8Array(8);
+  let tmp = counter;
+  for (let i = 7; i >= 0; i -= 1) {
+    counterBytes[i] = tmp & 0xff;
+    tmp = Math.floor(tmp / 256);
+  }
+  if (!crypto.subtle) return fallbackTotp(secretBytes, counter);
+  const key = await crypto.subtle.importKey(
+    "raw",
+    secretBytes,
+    { name: "HMAC", hash: "SHA-1" },
+    false,
+    ["sign"]
+  );
+  const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, counterBytes));
+  return hotpFromDigest(sig);
+}
+
+function hotpFromDigest(sig) {
+  const offset = sig[sig.length - 1] & 0x0f;
+  const binary =
+    ((sig[offset] & 0x7f) << 24) |
+    ((sig[offset + 1] & 0xff) << 16) |
+    ((sig[offset + 2] & 0xff) << 8) |
+    (sig[offset + 3] & 0xff);
+  return String(binary % 10 ** TOTP_DIGITS).padStart(TOTP_DIGITS, "0");
+}
+
+function fallbackTotp(secretBytes, counter) {
+  let acc = counter;
+  for (let i = 0; i < secretBytes.length; i += 1) {
+    acc = (acc * 131 + secretBytes[i]) >>> 0;
+  }
+  return String(acc % 10 ** TOTP_DIGITS).padStart(TOTP_DIGITS, "0");
+}
+
+function formatTokenCode(code) {
+  return `${code.slice(0, 3)} ${code.slice(3)}`;
+}
+
+function totpProgressSmooth() {
+  const stepMs = TOTP_STEP * 1000;
+  const elapsedMs = Date.now() % stepMs;
+  const remainingMs = stepMs - elapsedMs;
+  return {
+    remaining: Math.ceil(remainingMs / 1000),
+    progress: remainingMs / stepMs,
+  };
+}
+
+function refreshTokenRing() {
+  const ringEl = document.getElementById("token-ring-progress");
+  const secsEl = document.getElementById("token-secs");
+  const { remaining, progress } = totpProgressSmooth();
+  if (ringEl) {
+    const visible = TOKEN_RING_C * progress;
+    ringEl.style.strokeDasharray = `${visible} ${TOKEN_RING_C - visible}`;
+    ringEl.style.strokeDashoffset = "0";
+  }
+  if (secsEl) secsEl.textContent = String(remaining);
+}
+
+async function refreshTokenCode() {
+  const codeEl = document.getElementById("token-code");
+  if (!codeEl) return;
+  const bucket = Math.floor(Date.now() / 1000 / TOTP_STEP);
+  if (bucket === lastTotpBucket) {
+    codeEl.textContent = formatTokenCode(cachedTokenCode);
+    return;
+  }
+  lastTotpBucket = bucket;
+  try {
+    const secret = hexToBytes(getOrCreateTotpSecretHex());
+    cachedTokenCode = await computeTotp(secret);
+    codeEl.textContent = formatTokenCode(cachedTokenCode);
+  } catch {
+    codeEl.textContent = "— — —";
+  }
+}
+
+function tokenAnimLoop() {
+  refreshTokenRing();
+  tokenRaf = requestAnimationFrame(tokenAnimLoop);
+}
+
+function startTokenTimer() {
+  stopTokenTimer();
+  lastTotpBucket = -1;
+  refreshTokenCode();
+  refreshTokenRing();
+  tokenAnimLoop();
+  tokenTimer = setInterval(() => refreshTokenCode(), 500);
+}
+
+function stopTokenTimer() {
+  if (tokenRaf) {
+    cancelAnimationFrame(tokenRaf);
+    tokenRaf = null;
+  }
+  if (tokenTimer) {
+    clearInterval(tokenTimer);
+    tokenTimer = null;
+  }
+  lastTotpBucket = -1;
+}
+
+const TOKEN_TILE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+  <rect x="5" y="11" width="14" height="10" rx="2" stroke="currentColor" stroke-width="1.6"/>
+  <path d="M8 11V8a4 4 0 0 1 7.5-2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+  <path d="M14 4l3-2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+  <circle cx="18" cy="3" r="1.4" fill="currentColor"/>
+</svg>`;
+
+function renderTokenScreen() {
+  const hex = getOrCreateTotpSecretHex();
+  const suffix = hex.slice(-3);
+  const name = state.usuario || state.loginUser || "Usuário";
+  return `
+    <div class="token-screen ${state.tokenScreenOpen ? "open" : ""}" id="token-screen">
+      <header class="token-head">
+        <button type="button" class="token-back" id="btn-token-back" aria-label="Voltar">←</button>
+        <span class="token-brand">Esatto</span>
+      </header>
+      <div class="token-body">
+        <div class="token-info">
+          <p class="token-user">${esc(name)}</p>
+          <p class="token-meta">Token final: ${esc(suffix)}</p>
+        </div>
+        <div class="token-ring-stage">
+          <div class="token-ring-wrap">
+            <svg class="token-ring" viewBox="0 0 200 200" aria-hidden="true">
+              <circle class="token-ring-bg" cx="100" cy="100" r="${TOKEN_RING_R}" />
+              <g transform="rotate(90 100 100)">
+                <circle
+                  class="token-ring-progress"
+                  id="token-ring-progress"
+                  cx="100"
+                  cy="100"
+                  r="${TOKEN_RING_R}"
+                  style="stroke-dasharray:${TOKEN_RING_C} 0;stroke-dashoffset:0"
+                />
+              </g>
+            </svg>
+            <div class="token-center">
+              <span class="token-label">Token Esatto</span>
+              <div class="token-code" id="token-code">000 000</div>
+              <span class="token-countdown"><span id="token-secs">20</span>s</span>
+            </div>
+          </div>
+        </div>
+        <p class="token-foot">Código renovado a cada 20 segundos</p>
+      </div>
+    </div>`;
 }
 
 function isFullscreenActive() {
@@ -1174,6 +771,34 @@ function shouldShowFullscreenControl() {
   return !isStandalone();
 }
 
+function shouldAutoFullscreen() {
+  return isMobile() && isAndroid() && window.location.protocol === "http:" && !isStandalone();
+}
+
+function tryAutoFullscreen() {
+  if (!shouldAutoFullscreen() || isFullscreenActive()) return Promise.resolve(true);
+  return enterFullscreen().then(() => true).catch(() => false);
+}
+
+function initAutoFullscreen() {
+  if (autoFullscreenReady || !isMobile() || !isAndroid() || window.location.protocol !== "http:") return;
+  autoFullscreenReady = true;
+
+  const kick = () => tryAutoFullscreen();
+
+  kick();
+  requestAnimationFrame(kick);
+  setTimeout(kick, 120);
+
+  window.addEventListener("pageshow", kick);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) kick();
+  });
+
+  document.addEventListener("touchstart", kick, { capture: true, passive: true });
+  document.addEventListener("click", kick, { capture: true });
+}
+
 function enterFullscreen() {
   const el = document.documentElement;
   const fn =
@@ -1195,19 +820,19 @@ function renderInstallHint() {
   if (isStandalone() && !isNonStandardPort() && window.location.protocol === "https:") return "";
 
   let msg =
-    "Menu ⋮ → <strong>Instalar app</strong> (ou Adicionar à tela inicial) e abra pelo ícone <strong>Finanças</strong>.";
+    "Menu ⋮ → <strong>Instalar app</strong> (ou Adicionar à tela inicial) e abra pelo ícone <strong>Esatto</strong>.";
   if (isIOS()) {
     msg =
       "No iPhone, abra no <strong>Safari</strong> → Compartilhar → <strong>Adicionar à Tela de Início</strong> (não use o Chrome).";
   } else if (isNonStandardPort()) {
     msg =
-      "Pela porta não padrão, o Chrome pode manter a barra. Toque em <strong>Tela cheia</strong> abaixo ou no botão <strong>⛶</strong> no topo.";
+      "Pela porta <strong>:8443</strong>, o Chrome pode manter a barra. Toque em <strong>Tela cheia</strong> abaixo ou no botão <strong>⛶</strong> no topo para ocultá-la enquanto usa o app.";
   } else if (window.location.protocol === "https:") {
     msg =
       "Instale pelo menu ⋮ → <strong>Instalar app</strong>. Se a barra do Chrome aparecer, use <strong>Tela cheia</strong> ou <strong>⛶</strong> no topo.";
   } else if (window.location.protocol === "http:") {
     msg = isStandalone()
-      ? "Abra pelo ícone <strong>Finanças</strong> na tela inicial. Para sumir a barra de vez, use <strong>HTTPS</strong>."
+      ? "Abra pelo ícone <strong>Esatto</strong> na tela inicial. Para sumir a barra de vez, use <strong>HTTPS</strong> na porta 443."
       : "Adicione à tela inicial (Menu ⋮ → Instalar app). Se a barra aparecer, use <strong>Tela cheia</strong> ou <strong>⛶</strong> no topo.";
   }
 
@@ -1226,856 +851,224 @@ function renderFullscreenBarBtn() {
   return `<button type="button" class="conn-link" id="btn-fullscreen-bar" title="Tela cheia">⛶</button>`;
 }
 
+function renderComingSoon(title, svgMarkup) {
+  return `
+    <div class="coming-soon">
+      <div class="coming-soon-card">
+        <div class="coming-soon-art">${svgMarkup}</div>
+        <h2>${esc(title)}</h2>
+        <p class="coming-soon-msg">Em construção (05/11/26)...</p>
+      </div>
+    </div>`;
+}
+
+function renderMain() {
+  const tabContent =
+    state.tab === "desempenho"
+      ? renderDesempenho()
+      : state.tab === "fornecedores"
+        ? renderComingSoon("Fornecedores", PREVIEW_SVG.fornecedores)
+        : renderComingSoon("Fluxo de Caixa", PREVIEW_SVG.caixa);
+
+  return `
+    <div class="app ${state.loading ? "busy" : ""}">
+      <div class="scroll">
+        ${renderInstallHint()}
+        <div class="topbar">
+          <div class="topbar-brand">
+            <div class="title">Esatto!</div>
+            <div class="hello-row">
+              <span class="hello">${state.usuario ? esc(state.usuario) : "Não conectado"} · v${APP_VERSION}</span>
+              <button type="button" class="conn-link" id="btn-conn" title="Conexão / login">🔑</button>
+            </div>
+          </div>
+          <div class="topbar-actions">
+            ${renderFullscreenBarBtn()}
+            <button type="button" class="token-link" id="btn-app-token" title="Token de segurança">
+              ${TOKEN_TILE_SVG}
+            </button>
+          </div>
+        </div>
+        ${
+          state.tab === "desempenho"
+            ? `
+        <div class="period">
+          <div class="field"><label>Início</label><input id="dt-ini" type="date" value="${esc(state.inicio)}" /></div>
+          <div class="field"><label>Fim</label><input id="dt-fim" type="date" value="${esc(state.fim)}" /></div>
+          <button class="btn-go" id="btn-load">Atualizar</button>
+        </div>`
+            : ""
+        }
+        ${state.error ? `<p class="error">${esc(state.error)}</p>` : ""}
+        ${tabContent}
+      </div>
+      <nav class="tabs">
+        <button class="tab ${state.tab === "desempenho" ? "on" : ""}" data-tab="desempenho">Desempenho</button>
+        <button class="tab ${state.tab === "fornecedores" ? "on" : ""}" data-tab="fornecedores">Fornecedores</button>
+        <button class="tab ${state.tab === "caixa" ? "on" : ""}" data-tab="caixa">Caixa</button>
+      </nav>
+      ${renderSheet()}
+      ${renderTokenScreen()}
+      <div class="toast ${state.toast ? "show" : ""}">${esc(state.toast)}</div>
+    </div>`;
+}
+
+function renderSheet() {
+  return `
+    <div class="sheet ${state.sheetOpen ? "open" : ""}">
+      <div class="sheet-head">
+        <h2>Conexão</h2>
+        <button class="ghost" id="btn-close-sheet">×</button>
+      </div>
+      <div class="sheet-body">
+        <div class="field"><label>URL da API</label><input id="sheet-api" type="url" value="${esc(state.apiUrl)}" /></div>
+        <div class="field"><label>Usuário Windows</label><input id="sheet-user" type="text" value="${esc(state.loginUser)}" /></div>
+        <div class="field"><label>Senha</label><input id="sheet-pass" type="password" /></div>
+        ${state.error ? `<p class="error">${esc(state.error)}</p>` : ""}
+      </div>
+      <button class="save" id="btn-sheet-login">Gerar token / Entrar</button>
+    </div>`;
+}
+
 function esc(s) {
   return String(s ?? "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
 }
 
-function options(list, selected) {
-  const items = list.length ? list : [selected].filter(Boolean);
-  return items.map((v) => `<option ${v === selected ? "selected" : ""}>${esc(v)}</option>`).join("");
-}
-
-function loadingView() {
-  return `
-    <div class="app">
-      <div class="setup">
-        <div class="hello">Minhas Finanças</div>
-        <h1>Carregando…</h1>
-        <p class="muted">Conectando à planilha e atualizando os dados.</p>
-      </div>
-    </div>`;
-}
-
-function loginView() {
-  return `
-    <div class="app">
-      <div class="setup">
-        <div class="hello">Minhas Finanças</div>
-        <h1>Entrar</h1>
-        <p>Toque abaixo para abrir com sua conta Google. Na primeira vez, o Google pede permissão; depois entra direto.</p>
-        <p class="error" id="setupErr">${esc(state.error)}</p>
-        <button class="save" id="btnConnect" style="margin:18px 0 0;width:100%">Entrar com Google</button>
-      </div>
-    </div>`;
-}
-
-function setupView() {
-  return loginView();
-}
-
-function tabs() {
-  return `
-    <nav class="tabs tabs-5">
-      <button class="tab ${state.tab === "painel" ? "on" : ""}" data-tab="painel">Painel</button>
-      <button class="tab ${state.tab === "fluxo" ? "on" : ""}" data-tab="fluxo">Fluxo</button>
-      <button class="tab ${state.tab === "despesas" ? "on" : ""}" data-tab="despesas">Despesas</button>
-      <button class="tab ${state.tab === "receitas" ? "on" : ""}" data-tab="receitas">Receitas</button>
-      <button class="tab ${state.tab === "orcamento" ? "on" : ""}" data-tab="orcamento">Orç.</button>
-    </nav>`;
-}
-
-function fluxoView() {
-  const today = todayISO();
-  const rows = fluxoRows();
-  const last = rows.length ? rows[rows.length - 1] : null;
-  const consMap = Object.fromEntries((state.fluxoDias || []).map((x) => [x.dia, x.consolidado]));
-  const list = rows
-    .slice()
-    .reverse()
-    .map((r) => {
-      const mov = r.despesas || r.receitas;
-      const isToday = r.dia === today;
-      const cons = consMap[r.dia];
-      return `<div class="flux-row ${isToday ? "today" : ""} ${mov ? "mov" : ""} ${cons ? "consolidado" : ""}">
-        <div class="flux-head">
-          <b>${isoToBRShort(r.dia)}</b>
-          ${isToday ? '<span class="flux-tag">hoje</span>' : ""}
-          ${cons ? '<span class="flux-tag locked">consolidado</span>' : ""}
-        </div>
-        <div class="flux-grid">
-          <div><span>Inicial</span><b>${brl(r.saldoInicial)}</b></div>
-          <div><span>Saídas</span><b class="out">${r.despesas ? brl(r.despesas) : "—"}</b></div>
-          <div><span>Entradas</span><b class="in">${r.receitas ? brl(r.receitas) : "—"}</b></div>
-          <div><span>Final</span><b>${brl(r.saldoFinal)}</b></div>
-        </div>
-      </div>`;
-    })
-    .join("");
-  return `
-    <div class="scroll">
-      <div class="hello">Movimentação diária</div>
-      <div class="title">Fluxo de caixa</div>
-      <div class="hero flux-hero">
-        <div class="lbl">Saldo final ${last ? `(${isoToBRShort(last.dia)})` : ""}</div>
-        <div class="val">${brl(last?.saldoFinal ?? state.saldoInicial ?? 0)}</div>
-        <div class="sub">Saldo inicial do mês: ${brl(state.saldoInicial || 0)} (Config B12) · exibindo até hoje</div>
-        ${state.ultimaConsolidacao ? `<div class="sub">Consolidado até ${isoToBRShort(state.ultimaConsolidacao)} — lançamentos nessa data ou anteriores estão travados</div>` : ""}
-      </div>
-      <div class="section">Por dia (mais recente primeiro)</div>
-      ${list || `<p class="muted">Defina o mês em Config para ver o fluxo.</p>`}
-    </div>`;
-}
-
-function painelView(m) {
-  return `
-    <div class="scroll">
-      ${renderInstallHint()}
-      <div class="topbar">
-        <div class="hello">Olá, ${esc(state.nome)} <span class="app-ver">v${APP_VERSION}</span></div>
-        <div class="topbar-actions">
-          ${renderFullscreenBarBtn()}
-          <button class="linkish" id="btnReload">${state.loading ? "Atualizando…" : "Atualizar"}</button>
-        </div>
-      </div>
-      <div class="title">${esc(state.mes)} ${esc(state.ano)}</div>
-      <div class="hero hero-sobrando">
-        <div class="lbl">Sobrando</div>
-        <div class="val">${brl(m.sobrando)}</div>
-        <div class="sub">saldo do mês − a pagar ainda</div>
-      </div>
-      <div class="grid2">
-        <div class="kpi"><span>RECEITAS</span><b style="color:var(--emerald)">${brl(m.receitas)}</b><small class="kpi-hint">só recebidas</small></div>
-        <div class="kpi"><span>PREVISTO</span><b>${brl(m.previsto)}</b><small class="kpi-hint">despesas no plano</small></div>
-        <div class="kpi"><span>REALIZADO</span><b style="color:var(--rose)">${brl(m.realizado)}</b><small class="kpi-hint">só pagas</small></div>
-        <div class="kpi"><span>A PAGAR AINDA</span><b style="color:var(--violet)">${brl(m.pagar)}</b><small class="kpi-hint">previsto em aberto</small></div>
-        <div class="kpi"><span>USO DO ORÇAMENTO</span><b>${m.previsto ? pct(m.uso * 100) : "—"}</b><small class="kpi-hint">realizado ÷ previsto</small></div>
-        <div class="kpi"><span>SALDO DO MÊS</span><b>${brl(m.saldo)}</b><small class="kpi-hint">receitas realizadas − despesas realizadas</small></div>
-      </div>
-      <div class="section">Termômetro</div>
-      <div class="grid2">
-        <div class="kpi"><span>TAXA DE POUPANÇA</span><b>${pct(m.taxaPoupancaP)}</b></div>
-        <div class="kpi"><span>ECONOMIA VS. PREVISTO</span><b style="color:${m.economia >= 0 ? "var(--emerald)" : "var(--rose)"}">${brl(m.economia)}</b></div>
-      </div>
-      <div class="section">Regra 50-30-20</div>
-      <div class="bar-row"><div class="top"><span>Necessidades (meta 50%)</span><span>${brl(m.nec)} · ${pct(m.necP)}</span></div><div class="track"><div class="fill" style="width:${Math.min(m.necP, 100)}%;background:var(--teal)"></div></div></div>
-      <div class="bar-row"><div class="top"><span>Desejos (meta 30%)</span><span>${brl(m.des)} · ${pct(m.desP)}</span></div><div class="track"><div class="fill" style="width:${Math.min(m.desP, 100)}%;background:var(--amber)"></div></div></div>
-      <div class="bar-row"><div class="top"><span>Poupança (meta 20%)</span><span>${brl(m.pou)} · ${pct(m.pouP)}</span></div><div class="track"><div class="fill" style="width:${Math.min(m.pouP, 100)}%;background:var(--emerald)"></div></div></div>
-      ${m.receitas === 0 ? `<p class="muted" style="margin-top:8px;font-size:12px">Os % usam receitas recebidas no mês. Marque Recebido? nas receitas para calcular.</p>` : ""}
-      <div class="section">Leituras</div>
-      <div class="alert"><span class="dot" style="background:${m.realizado <= m.previsto ? "var(--emerald)" : "var(--rose)"}"></span> ${m.realizado <= m.previsto ? "Despesas realizadas ainda dentro do previsto" : "Você já gastou mais do que o previsto neste mês"}</div>
-      <div class="alert"><span class="dot" style="background:${m.saldo >= 0 ? "var(--emerald)" : "var(--rose)"}"></span> ${m.saldo >= 0 ? "Há saldo positivo neste mês" : "O saldo do mês está negativo: a renda realizada não cobre os gastos"}</div>
-      <div class="alert"><span class="dot" style="background:${m.atrasadas ? "var(--rose)" : m.breve ? "var(--amber)" : "var(--emerald)"}"></span> ${m.atrasadas ? `${m.atrasadas} conta(s) atrasada(s)` : m.breve ? `${m.breve} conta(s) vencem em breve` : "Nenhuma conta atrasada no mês"}</div>
-      <div class="alert"><span class="dot" style="background:${m.uso > 1 ? "var(--rose)" : "var(--emerald)"}"></span> ${m.previsto ? (m.uso > 1 ? `O orçamento estourou (${pct(m.uso * 100)} do previsto)` : `Uso do orçamento em ${pct(m.uso * 100)}`) : "Sem despesas previstas no mês"}</div>
-      ${m.receitas > 0 ? `<div class="alert"><span class="dot" style="background:${m.taxaPoupancaP >= m.metaPoupancaP ? "var(--emerald)" : "var(--amber)"}"></span> ${m.taxaPoupancaP >= m.metaPoupancaP ? "Meta de poupança no caminho" : `A poupança está abaixo da meta de ${pct(m.metaPoupancaP)} da renda`}</div>` : ""}
-      ${state.error ? `<p class="error">${esc(state.error)}</p>` : ""}
-      ${state.hint ? `<div class="alert"><span class="dot" style="background:var(--amber)"></span> ${esc(state.hint)}</div>` : ""}
-    </div>`;
-}
-
-function orcamentoView(m) {
-  const rows = state.orcamento
-    .filter((o) => isOrcamentoDataRow(o.categoria))
-    .map((o) => {
-      const uso = o.limite ? o.realizado / o.limite : 0;
-      const color = uso > 1 ? "var(--rose)" : uso >= 0.9 ? "var(--amber)" : "var(--teal)";
-      const sit = o.situacao || (uso > 1 ? "estourou" : uso >= 0.9 ? "atenção" : "no limite");
-      return `<div class="cat">
-        <div style="display:flex;justify-content:space-between;font-size:13px"><b>${esc(o.categoria)}</b><span>${brl(o.realizado)}</span></div>
-        <div class="track" style="margin-top:8px"><div class="fill" style="width:${Math.min(uso * 100, 120)}%;background:${color}"></div></div>
-        <small>Limite ${brl(o.limite)} · ${esc(sit)}</small>
-      </div>`;
-    })
-    .join("");
-  const deg = Math.min(m.usoLimite, 1) * 360;
-  return `
-    <div class="scroll">
-      <div class="hello">Uso do limite</div>
-      <div class="title">Orçamento</div>
-      <div class="ring-wrap">
-        <div class="ring" style="background:conic-gradient(var(--teal) 0 ${deg}deg,#e2e8f0 ${deg}deg 360deg)"><i>${Math.round(m.usoLimite * 100)}%</i></div>
-        <div>
-          <div style="font-size:12px;color:var(--muted)">${esc(state.mes)} ${esc(state.ano)}</div>
-          <div style="font-weight:700;margin-top:4px">${brl(m.realizado)} / ${brl(m.limite)}</div>
-          <div style="font-size:12px;color:var(--muted);margin-top:4px">Restam ${brl(Math.max(m.limite - m.realizado, 0))} no mês</div>
-        </div>
-      </div>
-      <div class="section">Por categoria</div>
-      ${rows || `<div class="empty">Sem categorias neste mês.</div>`}
-    </div>`;
-}
-
-function despesasView() {
-  const hit = state.searchHitRow;
-  const list = sortedDespesas()
-    .map(
-      (d) => `
-      <div class="item${d.sheetRow === hit ? " search-hit" : ""}" data-row="${d.sheetRow}" data-kind="despesa" role="button" tabindex="0">
-        <span class="check ${d.pago ? "yes" : ""}" data-toggle="${d.sheetRow}">${d.pago ? "✓" : ""}</span>
-        <span class="mid"><b>${esc(d.descricao || "(sem descrição)")}</b><small>${despSubline(d)}</small></span>
-        <span class="right"><b>${brl(despValor(d))}</b><span class="pill ${pillClass(d.status)}">${esc(d.status || (d.pago ? "Pago" : "Pendente"))}</span></span>
-      </div>`
-    )
-    .join("");
-  return `
-    <div class="scroll" id="despScroll">
-      <div class="hello">Lançamentos do mês</div>
-      <div class="title-row">
-        <div class="title">Despesas</div>
-        <div class="sort-btns">
-          <button type="button" class="sort-btn ${state.despSort === "vencimento" ? "on" : ""}" data-sort="vencimento">vencimento</button>
-          <button type="button" class="sort-btn ${state.despSort === "pgto" ? "on" : ""}" data-sort="pgto">Pgto</button>
-          <button type="button" class="sort-btn ${state.despSort === "valor" ? "on" : ""}" data-sort="valor">valor</button>
-        </div>
-      </div>
-      <input class="search" id="q" placeholder="Descrição, valor (ex.: 150,00) ou data (dd/mm/aa)" value="${esc(state.query)}" />
-      <div class="chips">
-        <button class="chip ${state.filtro === "todas" ? "on" : ""}" data-filtro="todas">Todas</button>
-        <button class="chip ${state.filtro === "pagar" ? "on" : ""}" data-filtro="pagar">A pagar</button>
-        <button class="chip ${state.filtro === "atrasadas" ? "on" : ""}" data-filtro="atrasadas">Atrasadas</button>
-      </div>
-      ${list || `<div class="empty">Nenhuma despesa neste mês. Toque no + para lançar.</div>`}
-    </div>
-    <button class="fab" id="fab">+</button>`;
-}
-
-function receitasView() {
-  const rm = receitasMetrics();
-  const list = monthReceitas()
-    .slice()
-    .sort((a, b) => {
-      const va = a.vencimento?.slice(0, 10) || "";
-      const vb = b.vencimento?.slice(0, 10) || "";
-      return vb.localeCompare(va);
-    })
-    .map(
-      (r) => `
-      <button type="button" class="item" data-row="${r.sheetRow}" data-kind="receita">
-        <span class="check ${r.pago ? "yes" : ""}" data-toggle-rec="${r.sheetRow}">${r.pago ? "✓" : ""}</span>
-        <span class="mid"><b>${esc(r.descricao || r.categoria || "(sem descrição)")}</b><small>${esc(r.categoria)} · ${r.vencimento ? isoToBR(r.vencimento) : ""}</small></span>
-        <span class="right"><b>${brl(r.pago ? r.realizado || r.previsto : r.previsto)}</b><span class="pill ${pillClass(r.status)}">${esc(r.status || (r.pago ? "Recebido" : "Pendente"))}</span></span>
-      </button>`
-    )
-    .join("");
-  return `
-    <div class="scroll">
-      <div class="hello">Entradas do mês</div>
-      <div class="title">Receitas</div>
-      <div class="grid2" style="margin-top:10px">
-        <div class="kpi"><span>PREVISTO</span><b>${brl(rm.previsto)}</b></div>
-        <div class="kpi"><span>REALIZADO</span><b style="color:var(--emerald)">${brl(rm.realizado)}</b></div>
-      </div>
-      ${rm.atrasadas ? `<div class="alert" style="margin-top:10px"><span class="dot" style="background:var(--rose)"></span> ${rm.atrasadas} receita(s) atrasada(s)</div>` : ""}
-      <div class="section">Lançamentos</div>
-      ${list || `<div class="empty">Nenhuma receita neste mês. Toque no + para lançar.</div>`}
-    </div>
-    <button class="fab" id="fabRec">+</button>`;
-}
-
-function sheetView() {
-  const f = state.form;
-  const L = state.listas;
-  const isRec = state.sheetKind === "receita";
-  const body = isRec
-    ? `
-        <div class="field"><label>Descrição</label><input id="fDesc" value="${esc(f.descricao)}" placeholder="Ex.: Salário março" /></div>
-        <div class="field"><label>Fonte</label><select id="fFonte">${options(L.fontes, f.fonte || f.categoria)}</select></div>
-        <div class="row2">
-          <div class="field"><label>Previsto</label><input id="fPrev" inputmode="decimal" value="${esc(f.previsto)}" placeholder="0,00" /></div>
-          <div class="field"><label>Data prevista</label><input id="fVenc" type="date" value="${esc(f.vencimento)}" /></div>
-        </div>
-        <div class="toggle">Já recebi <div class="switch ${f.pago ? "on" : ""}" id="pagoSwitch"><i></i></div></div>
-        <div class="field ${f.pago ? "" : "hidden"}" id="realizadoField">
-          <label>Realizado</label><input id="fReal" inputmode="decimal" value="${esc(f.realizado)}" placeholder="0,00" />
-        </div>
-        <div class="field ${f.pago ? "" : "hidden"}" id="recbField">
-          <label>Recebimento</label><input id="fRecb" type="date" value="${esc(f.dataRecebimento || f.vencimento || "")}" />
-        </div>
-        <div class="row2">
-          <div class="field"><label>Conta</label><select id="fConta">${options(L.contas, f.conta)}</select></div>
-          <div class="field"><label>Observações</label><input id="fObs" value="${esc(f.observacoes)}" placeholder="Opcional" /></div>
-        </div>`
-    : `
-        <div class="field"><label>Descrição</label><input id="fDesc" value="${esc(f.descricao)}" placeholder="Ex.: IPTU casa da praia" /></div>
-        <div class="field"><label>Categoria</label><select id="fCat">${options(L.categorias, f.categoria)}</select></div>
-        <div class="row2">
-          <div class="field"><label>Previsto</label><input id="fPrev" inputmode="decimal" value="${esc(f.previsto)}" placeholder="0,00" /></div>
-          <div class="field"><label>Vencimento</label><input id="fVenc" type="date" value="${esc(f.vencimento)}" /></div>
-        </div>
-        <div class="field">
-          <label>Data de pagamento</label>
-          <input id="fPgto" type="date" value="${esc(f.dataPagamento || "")}" />
-          <small class="kpi-hint">Se marcar como pago sem data, usa o vencimento (pode alterar depois)</small>
-        </div>
-        <div class="toggle">Já paguei <div class="switch ${f.pago ? "on" : ""}" id="pagoSwitch"><i></i></div></div>
-        <div class="field ${f.pago ? "" : "hidden"}" id="realizadoField">
-          <label>Realizado</label><input id="fReal" inputmode="decimal" value="${esc(f.realizado)}" placeholder="0,00" />
-        </div>
-        <button class="more" id="moreBtn">${state.moreOpen ? "Menos detalhes" : "Mais detalhes"}</button>
-        <div class="${state.moreOpen ? "" : "hidden"}" id="extra">
-          <div class="row2">
-            <div class="field"><label>Tipo</label><select id="fTipo">${options(L.tipos, f.tipo)}</select></div>
-            <div class="field"><label>Prioridade</label><select id="fPrio">${options(L.prioridades, f.prioridade)}</select></div>
-          </div>
-          <div class="row2">
-            <div class="field"><label>Conta</label><select id="fConta">${options(L.contas, f.conta)}</select></div>
-            <div class="field"><label>Recorrente</label><select id="fRec">${options(["Não", "Sim"], f.recorrente)}</select></div>
-          </div>
-          <div class="field"><label>Parcela</label><input id="fParc" value="${esc(f.parcela)}" placeholder="Ex.: 3/12" /></div>
-          <div class="field"><label>Observações</label><input id="fObs" value="${esc(f.observacoes)}" placeholder="Opcional" /></div>
-        </div>`;
-  const editingDesp = !isRec && state.editingRow;
-  const deleteOverlay =
-    state.deleteConfirm && editingDesp
-      ? `
-      <div class="sheet-confirm" id="confirmDelete">
-        <div class="confirm-box">
-          <h3>Excluir lançamento?</h3>
-          <p>Deseja excluir <strong>${esc(state.deleteConfirm.descricao)}</strong>?</p>
-          <div class="confirm-actions">
-            <button type="button" class="confirm-no" id="deleteNo">Não</button>
-            <button type="button" class="confirm-yes" id="deleteYes">Sim</button>
-          </div>
-        </div>
-      </div>`
-      : "";
-  return `
-    <div class="sheet ${state.sheetOpen ? "open" : ""}" id="sheet">
-      <div class="sheet-head">
-        <h2>${state.editingRow ? (isRec ? "Editar receita" : "Editar despesa") : isRec ? "Nova receita" : "Nova despesa"}</h2>
-        <div class="sheet-head-actions">
-          ${editingDesp ? `<button type="button" class="sheet-del" id="btnDeleteDesp" aria-label="Excluir despesa"><span>🗑</span></button>` : ""}
-          <button type="button" class="ghost" id="closeSheet" aria-label="Fechar">×</button>
-        </div>
-      </div>
-      <div class="sheet-body">${body}</div>
-      <button class="save" id="saveBtn">${state.loading ? "Salvando…" : "Salvar na planilha"}</button>
-      ${deleteOverlay}
-    </div>`;
-}
-
-function appView() {
-  const m = metrics();
-  let body = "";
-  if (state.tab === "painel") body = painelView(m);
-  if (state.tab === "fluxo") body = fluxoView();
-  if (state.tab === "orcamento") body = orcamentoView(m);
-  if (state.tab === "despesas") body = despesasView();
-  if (state.tab === "receitas") body = receitasView();
-  return `<div class="app ${state.loading ? "busy" : ""}">${body}${tabs()}${sheetView()}
-    <div class="toast ${state.toast ? "show" : ""}">${esc(state.toast)}</div></div>`;
-}
-
-function scrollToSearchHit() {
-  if (!state.searchHitRow) return;
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      document
-        .querySelector(`.item[data-row="${state.searchHitRow}"]`)
-        ?.scrollIntoView({ block: "center", behavior: "smooth" });
-    });
-  });
-}
-
-function render() {
-  updateSearchHit();
-  const root = document.getElementById("root");
-  const ready = state.clientId && state.spreadsheetId && state.token;
-  const active = document.activeElement;
-  const activeId = active?.id;
-  const sel = active && active.selectionStart;
-  if (state.booting) root.innerHTML = loadingView();
-  else if (ready) root.innerHTML = appView();
-  else root.innerHTML = loginView();
-  bind();
-  if (activeId) {
-    const el = document.getElementById(activeId);
-    if (el) {
-      const focusOpts = activeId === "q" ? { preventScroll: true } : undefined;
-      el.focus(focusOpts);
-      if (typeof sel === "number" && el.setSelectionRange) {
-        try { el.setSelectionRange(sel, sel); } catch (_) {}
-      }
-    }
-  }
-  scrollToSearchHit();
-}
-
-function readFormFromDom() {
-  const $ = (id) => document.getElementById(id);
-  if (!$("fDesc")) return;
-  state.form.descricao = $("fDesc").value;
-  state.form.previsto = $("fPrev").value;
-  state.form.vencimento = $("fVenc").value;
-  state.form.realizado = $("fReal") ? $("fReal").value : state.form.realizado;
-  if ($("fFonte")) {
-    state.form.fonte = $("fFonte").value;
-    state.form.conta = $("fConta").value;
-    state.form.observacoes = $("fObs").value;
-  }
-  if ($("fPgto")) state.form.dataPagamento = $("fPgto").value;
-  if ($("fRecb")) state.form.dataRecebimento = $("fRecb").value;
-  if ($("fCat")) {
-    state.form.categoria = $("fCat").value;
-    state.form.tipo = $("fTipo").value;
-    state.form.prioridade = $("fPrio").value;
-    state.form.conta = $("fConta").value;
-    state.form.recorrente = $("fRec").value;
-    state.form.parcela = $("fParc").value;
-    state.form.observacoes = $("fObs").value;
-  }
-}
-
-function openNew(kind = "despesa") {
-  state.editingRow = null;
-  state.moreOpen = false;
-  state.sheetKind = kind;
-  state.form = blankForm(kind);
-  if (kind === "despesa" && state.listas.categorias[0]) state.form.categoria = state.listas.categorias[0];
-  if (kind === "receita" && state.listas.fontes[0]) state.form.fonte = state.listas.fontes[0];
-  state.sheetOpen = true;
-  render();
-}
-
-function openEdit(row, kind = "despesa") {
-  const list = kind === "receita" ? state.receitas : state.despesas;
-  const d = list.find((x) => x.sheetRow === row);
-  if (!d) return;
-  state.editingRow = row;
-  state.sheetKind = kind;
-  state.moreOpen = false;
-  if (kind === "receita") {
-    state.form = {
-      pago: d.pago,
-      descricao: d.descricao,
-      fonte: d.categoria,
-      vencimento: d.vencimento || todayISO(),
-      previsto: fmtMoneyInput(d.previsto),
-      realizado: fmtMoneyInput(d.realizado),
-      dataRecebimento: d.dataRecebimento || d.vencimento || "",
-      conta: d.conta || "Nubank",
-      observacoes: d.observacoes,
-    };
-  } else {
-    state.form = {
-      pago: d.pago,
-      descricao: d.descricao,
-      categoria: d.categoria,
-      tipo: d.tipo || "Variável",
-      vencimento: d.vencimento || todayISO(),
-      prioridade: d.prioridade || "Média",
-      previsto: fmtMoneyInput(d.previsto),
-      realizado: fmtMoneyInput(d.realizado),
-      dataPagamento: d.dataPagamento || "",
-      conta: d.conta || "Nubank",
-      recorrente: d.recorrente || "Não",
-      parcela: d.parcela,
-      observacoes: d.observacoes,
-    };
-  }
-  state.sheetOpen = true;
-  render();
-}
-
-function firstEmptyRow(meta, rows) {
-  const used = new Set(rows.map((d) => d.sheetRow));
-  const start = (meta?.headerRow ?? 4) + 2;
-  for (let r = start; r < start + 400; r++) {
-    if (!used.has(r)) return r;
-  }
-  return start + rows.length;
-}
-
-async function saveSheet() {
-  readFormFromDom();
-  const f = state.form;
-  const isRec = state.sheetKind === "receita";
-  const label = isRec ? "fonte ou descrição" : "descrição";
-  if (!f.descricao.trim() && !(isRec && f.fonte)) {
-    showToast(`Preencha a ${label}.`);
-    return;
-  }
-  const pagoErr = validatePagoRecebido(f, isRec ? "receita" : "despesa");
-  if (pagoErr) {
-    showToast(pagoErr);
-    return;
-  }
-  if (!isRec && f.dataPagamento && !f.pago) {
-    const err = validateDataMovimento(f.dataPagamento, "pagamento");
-    if (err) {
-      showToast(err);
-      return;
-    }
-  }
-  if (isRec) {
-    const dt = f.dataRecebimento || (f.pago ? f.vencimento : "");
-    if (dt) {
-      const err = validateDataMovimento(dt, "recebimento");
-      if (err) {
-        showToast(err);
-        return;
-      }
-    }
-  }
-  const idx = (isRec ? state._recMeta : state._despMeta)?.idx || {};
-  const sheet = isRec ? "Receitas" : "Despesas";
-  const row = state.editingRow || firstEmptyRow(isRec ? state._recMeta : state._despMeta, isRec ? state.receitas : state.despesas);
-  const competencia = `${state.ano}-${String(state.mesNum).padStart(2, "0")}-01`;
-  const previsto = num(f.previsto);
-  const realizado = f.pago ? num(f.realizado || f.previsto) : num(f.realizado);
-  const writes = isRec
-    ? {
-        pago: f.pago,
-        competencia: isoToBR(competencia),
-        categoria: f.fonte || f.categoria,
-        descricao: f.descricao.trim() || f.fonte,
-        vencimento: isoToBR(f.vencimento),
-        previsto,
-        realizado: f.pago ? realizado : realizado || "",
-        conta: f.conta,
-        observacoes: f.observacoes,
-      }
-    : {
-        pago: f.pago,
-        competencia: isoToBR(competencia),
-        categoria: f.categoria,
-        descricao: f.descricao.trim(),
-        tipo: f.tipo,
-        vencimento: isoToBR(f.vencimento),
-        prioridade: f.prioridade,
-        previsto,
-        realizado: f.pago ? realizado : realizado || "",
-        conta: f.conta,
-        recorrente: f.recorrente,
-        parcela: f.parcela,
-        observacoes: f.observacoes,
-      };
-  if (!isRec) {
-    writes.dataPagamento = f.pago ? isoToBR(despesaDataPagamento(f)) : "";
-  }
-  if (isRec && idx.dataRecebimento != null) {
-    writes.dataRecebimento = f.pago ? isoToBR(f.dataRecebimento || f.vencimento) : "";
-  }
-  const data = [];
-  for (const [field, value] of Object.entries(writes)) {
-    const col = isRec ? idx[field] : despColIdx(idx, field);
-    if (col == null) continue;
-    data.push({
-      range: `${sheet}!${colLetter(col)}${row}`,
-      values: [[value]],
-    });
-  }
-  state.loading = true;
-  render();
-  try {
-    await api("/values:batchUpdate?valueInputOption=USER_ENTERED", {
-      method: "POST",
-      body: JSON.stringify({ valueInputOption: "USER_ENTERED", data }),
-    });
-    state.sheetOpen = false;
-    showToast("Salvo. Status e % calculam na planilha.");
-    await refresh();
-  } catch (err) {
-    state.loading = false;
-    state.error = err.message;
-    showToast(err.message);
-    render();
-  }
-}
-
-async function togglePago(row, ev, kind = "despesa") {
-  ev.stopPropagation();
-  const list = kind === "receita" ? state.receitas : state.despesas;
-  const sheet = kind === "receita" ? "Receitas" : "Despesas";
-  const d = list.find((x) => x.sheetRow === row);
-  if (!d || d.idx?.pago == null) return;
-  const next = !d.pago;
-  if (next) {
-    if (kind === "despesa") {
-      const dt = despesaDataPagamento(d);
-      if (!dt) {
-        showToast("Informe o vencimento antes de marcar como pago.");
-        return;
-      }
-      const err = validateDataMovimento(dt, "pagamento");
-      if (err) {
-        showToast(err);
-        return;
-      }
-    } else {
-      const dt = d.dataRecebimento || d.vencimento;
-      if (!dt) {
-        showToast("Informe a data de recebimento em Editar antes de marcar como recebido.");
-        return;
-      }
-      const err = validateDataMovimento(dt, "recebimento");
-      if (err) {
-        showToast(err);
-        return;
-      }
-    }
-  }
-  const pagoCol = kind === "despesa" ? despColIdx(d.idx, "pago") : d.idx.pago;
-  const data = [{ range: `${sheet}!${colLetter(pagoCol)}${row}`, values: [[next]] }];
-  if (next && !d.realizado && d.previsto) {
-    const realCol = kind === "despesa" ? despColIdx(d.idx, "realizado") : d.idx.realizado;
-    data.push({ range: `${sheet}!${colLetter(realCol)}${row}`, values: [[d.previsto]] });
-  }
-  if (kind === "despesa") {
-    const pgtoCol = despColIdx(d.idx, "dataPagamento");
-    if (next) {
-      const pgto = despesaDataPagamento(d);
-      if (pgto) {
-        data.push({ range: `${sheet}!${colLetter(pgtoCol)}${row}`, values: [[isoToBR(pgto)]] });
-      }
-    } else {
-      data.push({ range: `${sheet}!${colLetter(pgtoCol)}${row}`, values: [[""]] });
-    }
-  }
-  if (kind === "receita" && !next && d.idx.dataRecebimento != null) {
-    data.push({ range: `${sheet}!${colLetter(d.idx.dataRecebimento)}${row}`, values: [[""]] });
-  }
-  try {
-    await api("/values:batchUpdate?valueInputOption=USER_ENTERED", {
-      method: "POST",
-      body: JSON.stringify({ valueInputOption: "USER_ENTERED", data }),
-    });
-    await refresh();
-  } catch (err) {
-    showToast(err.message);
-  }
-}
-
-async function getDespesasSheetId() {
-  if (state._despSheetId != null) return state._despSheetId;
-  const data = await api("?fields=sheets(properties(sheetId,title))");
-  const sheet = (data.sheets || []).find((s) => s.properties?.title === "Despesas");
-  if (!sheet) throw new Error("Aba Despesas não encontrada na planilha.");
-  state._despSheetId = sheet.properties.sheetId;
-  return state._despSheetId;
-}
-
-function openDeleteConfirm(row) {
-  const d = state.despesas.find((x) => x.sheetRow === row);
-  if (!d) return;
-  state.deleteConfirm = { row, descricao: d.descricao || "(sem descrição)" };
-  render();
-}
-
-function closeDeleteConfirm() {
-  state.deleteConfirm = null;
-  render();
-}
-
-async function deleteExpense(row) {
-  const sheetId = await getDespesasSheetId();
-  state.loading = true;
-  state.deleteConfirm = null;
-  state.sheetOpen = false;
-  render();
-  try {
-    await api(":batchUpdate", {
-      method: "POST",
-      body: JSON.stringify({
-        requests: [
-          {
-            deleteDimension: {
-              range: {
-                sheetId,
-                dimension: "ROWS",
-                startIndex: row - 1,
-                endIndex: row,
-              },
-            },
-          },
-        ],
-      }),
-    });
-    showToast("Lançamento excluído.");
-    await refresh();
-  } catch (err) {
-    state.loading = false;
-    showToast(err.message);
-    render();
-  }
-}
-
-function showToast(msg) {
-  state.toast = msg;
-  render();
-  setTimeout(() => {
-    state.toast = "";
-    render();
-  }, 2400);
-}
-
-function bindRootActions() {
-  const root = document.getElementById("root");
-  if (!root || root.dataset.actionsBound) return;
-  root.dataset.actionsBound = "1";
-  root.addEventListener("click", (e) => {
-    const sortBtn = e.target.closest("[data-sort]");
-    if (sortBtn) {
-      e.preventDefault();
-      state.despSort = sortBtn.dataset.sort;
-      render();
-      return;
-    }
-    const filtroBtn = e.target.closest("[data-filtro]");
-    if (filtroBtn) {
-      e.preventDefault();
-      state.filtro = filtroBtn.dataset.filtro;
-      render();
-      return;
-    }
-    const tabBtn = e.target.closest("[data-tab]");
-    if (tabBtn) {
-      state.tab = tabBtn.dataset.tab;
-      state.sheetOpen = false;
-      state.deleteConfirm = null;
-      render();
-      return;
-    }
-    const itemBtn = e.target.closest(".item[data-row]");
-    if (itemBtn && !e.target.closest("[data-toggle]") && !e.target.closest("[data-toggle-rec]")) {
-      openEdit(Number(itemBtn.dataset.row), itemBtn.dataset.kind || "despesa");
-      return;
-    }
-    const toggleDesp = e.target.closest("[data-toggle]");
-    if (toggleDesp) {
-      togglePago(Number(toggleDesp.dataset.toggle), e, "despesa");
-      return;
-    }
-    const toggleRec = e.target.closest("[data-toggle-rec]");
-    if (toggleRec) {
-      togglePago(Number(toggleRec.dataset.toggleRec), e, "receita");
-      return;
-    }
-    if (e.target.closest("#btnDeleteDesp")) {
-      e.preventDefault();
-      e.stopPropagation();
-      if (state.editingRow) openDeleteConfirm(state.editingRow);
-      return;
-    }
-    if (e.target.closest("#deleteNo")) {
-      e.preventDefault();
-      closeDeleteConfirm();
-      return;
-    }
-    if (e.target.closest("#deleteYes")) {
-      e.preventDefault();
-      if (state.deleteConfirm?.row) deleteExpense(state.deleteConfirm.row);
-    }
-  });
-}
-
-function bind() {
-  bindRootActions();
-  const on = (id, ev, fn) => {
-    const el = document.getElementById(id);
-    if (el) el.addEventListener(ev, fn);
-  };
-
+function bindEvents() {
   const goFullscreen = () => {
     enterFullscreen()
       .then(() => showToast("Tela cheia ativada."))
       .catch(() => showToast("Tela cheia indisponível neste navegador."));
   };
-  on("btn-fullscreen", "click", goFullscreen);
-  on("btn-fullscreen-bar", "click", goFullscreen);
-  on("btn-dismiss-install", "click", () => {
+  document.getElementById("btn-fullscreen")?.addEventListener("click", goFullscreen);
+  document.getElementById("btn-fullscreen-bar")?.addEventListener("click", goFullscreen);
+  document.getElementById("btn-dismiss-install")?.addEventListener("click", () => {
     localStorage.setItem(INSTALL_HINT_KEY, "1");
     document.getElementById("install-hint")?.remove();
   });
-
-  on("btnConnect", "click", async () => {
-    const err = document.getElementById("setupErr");
-    applyStoredConfig();
-    if (err) err.textContent = "";
-    state.error = "";
-    state.loading = true;
+  document.getElementById("btn-conn")?.addEventListener("click", () => {
+    state.sheetOpen = true;
     render();
-    try {
-      await ensureSession();
-      await refresh();
-    } catch (e) {
-      state.error = e.message;
-      state.token = null;
-      render();
-    } finally {
-      state.loading = false;
-      render();
-    }
   });
-
-  on("btnReload", "click", () => refresh());
-  on("fab", "click", () => openNew("despesa"));
-  on("fabRec", "click", () => openNew("receita"));
-  on("closeSheet", "click", () => {
+  document.getElementById("btn-app-token")?.addEventListener("click", () => {
+    state.tokenScreenOpen = true;
+    render();
+  });
+  document.getElementById("btn-token-back")?.addEventListener("click", () => {
+    state.tokenScreenOpen = false;
+    render();
+  });
+  document.getElementById("btn-close-sheet")?.addEventListener("click", () => {
     state.sheetOpen = false;
     render();
   });
-  on("moreBtn", "click", () => {
-    readFormFromDom();
-    state.moreOpen = !state.moreOpen;
+  document.getElementById("btn-load")?.addEventListener("click", () => {
+    state.inicio = document.getElementById("dt-ini")?.value || state.inicio;
+    state.fim = document.getElementById("dt-fim")?.value || state.fim;
+    saveConfig({ inicio: state.inicio, fim: state.fim });
+    loadDesempenho();
+  });
+  document.getElementById("th-loja")?.addEventListener("click", () => {
+    state.sortMode = cycleSortMode(state.sortMode);
     render();
   });
-  on("pagoSwitch", "click", () => {
-    readFormFromDom();
-    const next = !state.form.pago;
-    if (next) {
-      const kind = state.sheetKind === "receita" ? "receita" : "despesa";
-      const trial = { ...state.form, pago: true };
-      const err = validatePagoRecebido(trial, kind);
-      if (err) {
-        showToast(err);
-        return;
-      }
-    }
-    state.form.pago = next;
-    if (state.form.pago && !state.form.realizado) state.form.realizado = state.form.previsto;
-    if (state.form.pago && state.sheetKind === "despesa" && !state.form.dataPagamento && state.form.vencimento) {
-      state.form.dataPagamento = state.form.vencimento;
-    }
+  document.getElementById("th-venda")?.addEventListener("click", () => {
+    state.sortMode = clickVendaSort(state.sortMode);
     render();
   });
-  on("saveBtn", "click", saveSheet);
-  on("q", "input", (e) => {
-    state.query = e.target.value;
-    render();
+  document.querySelectorAll(".tab").forEach((el) => {
+    el.addEventListener("click", () => {
+      if (state.tab === "desempenho" && el.dataset.tab !== "desempenho") destroyCharts();
+      state.tab = el.dataset.tab;
+      render();
+    });
   });
-  on("q", "keydown", (e) => {
-    if (e.key !== "Enter") return;
-    e.preventDefault();
-    updateSearchHit();
-    if (state.searchHitRow) scrollToSearchHit();
-    else {
-      const q = state.query.trim();
-      if (isValueQuery(q)) showToast(`Nenhuma despesa com valor ≥ ${brl(num(q))}`);
-      else if (parseQueryDate(q)) showToast(`Nenhuma despesa com vencimento ≥ ${q}`);
-    }
-  });
+  const sheetLogin = () => {
+    state.apiUrl = effectiveApiUrl(document.getElementById("sheet-api")?.value?.trim());
+    state.loginUser = document.getElementById("sheet-user")?.value?.trim() || "";
+    state.loginPass = document.getElementById("sheet-pass")?.value || "";
+    saveConfig({ apiUrl: state.apiUrl });
+    doLogin();
+  };
+  document.getElementById("btn-sheet-login")?.addEventListener("click", sheetLogin);
+  if (state.data) requestAnimationFrame(() => renderCharts());
 }
 
-async function boot() {
-  applyStoredConfig();
+function render() {
+  const root = document.getElementById("root");
+  if (!state.apiUrl || !state.token) {
+    stopTokenTimer();
+    root.innerHTML = renderSetup();
+    document.getElementById("btn-login")?.addEventListener("click", () => {
+      state.apiUrl = effectiveApiUrl(document.getElementById("api-url")?.value?.trim());
+      state.loginUser = document.getElementById("login-user")?.value?.trim() || "";
+      state.loginPass = document.getElementById("login-pass")?.value || "";
+      saveConfig({ apiUrl: state.apiUrl });
+      doLogin();
+    });
+    kickAutoFullscreen();
+    return;
+  }
+  root.innerHTML = renderMain();
+  bindEvents();
+  if (state.tokenScreenOpen) startTokenTimer();
+  else stopTokenTimer();
+  kickAutoFullscreen();
+}
+
+function kickAutoFullscreen() {
+  tryAutoFullscreen();
+}
+
+function initPlatformClasses() {
+  if (!isIOS()) return;
+  const root = document.documentElement;
+  root.classList.add("ios");
+  if (window.navigator.standalone === true || window.matchMedia("(display-mode: standalone)").matches) {
+    root.classList.add("ios-standalone");
+  } else {
+    root.classList.add("ios-browser");
+  }
+}
+
+function initSplash() {
+  const splash = document.getElementById("splash");
+  if (!splash) return;
+  const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const hold = reduced ? 120 : SPLASH_HOLD_MS;
+  const out = reduced ? 0 : SPLASH_OUT_MS;
+  window.setTimeout(() => {
+    if (out) splash.classList.add("splash-out");
+    window.setTimeout(() => splash.remove(), out || 0);
+  }, (reduced ? 0 : SPLASH_IN_MS) + hold);
+}
+
+function boot() {
+  initPlatformClasses();
+  initSplash();
+  const cfg = loadConfig();
+  state.apiUrl = effectiveApiUrl(cfg.apiUrl);
+  state.token = cfg.token || "";
+  state.usuario = cfg.usuario || "";
+  state.inicio = cfg.inicio || firstDayMonthISO();
+  state.fim = cfg.fim || todayISO();
+  state.loginUser = cfg.usuario || "";
+  initAutoFullscreen();
   render();
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker
-      .getRegistrations()
-      .then((regs) => {
-        regs.forEach((reg) => reg.unregister().catch(() => {}));
-      })
-      .finally(() => {
-        navigator.serviceWorker
-          .register(`./sw.js?v=${APP_VERSION}`)
-          .then((reg) => reg.update())
-          .catch(() => {});
-      });
+    navigator.serviceWorker.getRegistrations().then((regs) => {
+      regs.forEach((reg) => reg.unregister().catch(() => {}));
+    }).finally(() => {
+      navigator.serviceWorker
+        .register(`./sw.js?v=${APP_VERSION}`)
+        .then((reg) => reg.update())
+        .catch(() => {});
+    });
   }
-  try {
-    await ensureSession();
-    await refresh();
-  } catch (e) {
-    state.error = e.message;
-    state.token = null;
-  } finally {
-    state.booting = false;
-    render();
-  }
+  if (state.token && state.apiUrl) loadDesempenho();
 }
 
 boot();
