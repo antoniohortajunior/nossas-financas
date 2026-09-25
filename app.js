@@ -1,4 +1,4 @@
-const APP_VERSION = "45";
+const APP_VERSION = "46";
 const INSTALL_HINT_KEY = "financas-install-hint-v11";
 const KEY = "minhas-financas-config";
 const SCOPE =
@@ -1077,6 +1077,60 @@ function fluxoCaixaComputed() {
   });
 }
 
+function fluxoRowByDia(isoDate) {
+  const t = String(isoDate || "").slice(0, 10);
+  return state.fluxoDias.find((x) => x.dia.slice(0, 10) === t);
+}
+
+/** Clica no dia: consolida até ele ou desfaz consolidação dele e dos anteriores (col F na planilha). */
+async function toggleFluxoConsolidacao(isoDate) {
+  if (!state.token || !state.spreadsheetId) {
+    showToast("Conecte-se à planilha para consolidar.");
+    return;
+  }
+  const target = String(isoDate || "").slice(0, 10);
+  const hit = fluxoRowByDia(target);
+  if (!hit) {
+    showToast("Dia não encontrado na aba Fluxo de caixa.");
+    return;
+  }
+  const desmarcar = !!hit.consolidado;
+  const novoValor = desmarcar ? false : true;
+  const data = [];
+  for (const row of state.fluxoDias) {
+    if (row.dia.slice(0, 10) > target) continue;
+    if (row.consolidado === novoValor) continue;
+    data.push({
+      range: `Fluxo de caixa!F${row.sheetRow}`,
+      values: [[novoValor]],
+    });
+  }
+  if (!data.length) {
+    showToast(desmarcar ? "Nada a desmarcar." : "Já consolidado até este dia.");
+    return;
+  }
+  state.loading = true;
+  render();
+  try {
+    await api("/values:batchUpdate?valueInputOption=USER_ENTERED", {
+      method: "POST",
+      body: JSON.stringify({ valueInputOption: "USER_ENTERED", data }),
+    });
+    await loadFluxoSheet();
+    showToast(
+      desmarcar
+        ? `Consolidação desfeita em ${isoToBRShort(target)} e dias anteriores.`
+        : `Consolidado até ${isoToBRShort(target)} (inclui dias anteriores).`
+    );
+  } catch (err) {
+    state.error = err.message;
+    showToast(err.message);
+  } finally {
+    state.loading = false;
+    render();
+  }
+}
+
 function fluxoRows() {
   const today = todayISO();
   const computed = fluxoCaixaComputed();
@@ -1436,7 +1490,8 @@ function fluxoView() {
       const mov = r.despesas || r.receitas;
       const isToday = r.dia === today;
       const cons = consMap[r.dia];
-      return `<div class="flux-row ${isToday ? "today" : ""} ${mov ? "mov" : ""} ${cons ? "consolidado" : ""}">
+      const consHint = cons ? "Desfazer consolidação deste dia e dos anteriores" : "Consolidar este dia e os anteriores ainda abertos";
+      return `<button type="button" class="flux-row ${isToday ? "today" : ""} ${mov ? "mov" : ""} ${cons ? "consolidado" : ""}" data-flux-dia="${esc(r.dia)}" title="${esc(consHint)}">
         <div class="flux-head">
           <b>${isoToBRShort(r.dia)}</b>
           ${isToday ? '<span class="flux-tag">hoje</span>' : ""}
@@ -1448,7 +1503,7 @@ function fluxoView() {
           <div><span>Entradas</span><b class="in">${r.receitas ? brl(r.receitas) : "—"}</b></div>
           <div><span>Final</span><b>${brl(r.saldoFinal)}</b></div>
         </div>
-      </div>`;
+      </button>`;
     })
     .join("");
   return `
@@ -1462,6 +1517,7 @@ function fluxoView() {
         ${state.ultimaConsolidacao ? `<div class="sub">Consolidado até ${isoToBRShort(state.ultimaConsolidacao)} — lançamentos nessa data ou anteriores estão travados</div>` : ""}
       </div>
       <div class="section">Por dia (mais recente primeiro)</div>
+      <p class="flux-tap-hint">Toque em um dia para consolidar até ele ou desfazer consolidação dele e dos anteriores.</p>
       ${list || `<p class="muted">Defina o mês em Config para ver o fluxo.</p>`}
       ${rows.length ? `<div class="section">Gráfico do mês</div>${fluxoDailyChartHtml(rows)}` : ""}
     </div>`;
@@ -2169,6 +2225,12 @@ function bindRootActions() {
       state.filtro = filtroBtn.dataset.filtro;
       if (filtroBtn.dataset.filtro !== "todas") state.catFilter = "";
       render();
+      return;
+    }
+    const fluxDayBtn = e.target.closest("[data-flux-dia]");
+    if (fluxDayBtn) {
+      e.preventDefault();
+      if (!state.loading) toggleFluxoConsolidacao(fluxDayBtn.dataset.fluxDia);
       return;
     }
     const tabBtn = e.target.closest("[data-tab]");

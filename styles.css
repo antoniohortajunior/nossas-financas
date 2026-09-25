@@ -122,11 +122,32 @@ body {
 .tabs-5 .tab { font-size: 9px; padding: 0 1px; }
 .flux-hero .sub { font-size: 11px; margin-top: 6px; opacity: 0.9; }
 .flux-row {
+  display: block;
+  width: 100%;
   border: 1px solid var(--line);
   border-radius: 14px;
   padding: 10px 12px;
   margin-bottom: 8px;
   background: #fff;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.flux-row:hover,
+.flux-row:focus-visible {
+  border-color: #94a3b8;
+  outline: none;
+  box-shadow: 0 0 0 1px #e2e8f0;
+}
+.flux-row:active:not(:disabled) { transform: scale(0.995); }
+.flux-row:disabled { opacity: 0.65; cursor: wait; }
+.flux-tap-hint {
+  margin: 0 0 10px;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.35;
 }
 .flux-row.today { border-color: var(--teal); box-shadow: 0 0 0 1px var(--teal-soft); }
 .flux-row.mov { background: linear-gradient(180deg, #f0fdfa 0%, #fff 100%); }
