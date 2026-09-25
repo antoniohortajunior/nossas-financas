@@ -154,6 +154,62 @@ body {
 .flux-grid b { font-size: 13px; }
 .flux-grid b.out { color: var(--rose); }
 .flux-grid b.in { color: var(--emerald); }
+.flux-chart-card {
+  margin-top: 8px;
+  margin-bottom: 16px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 12px 10px 10px;
+}
+.flux-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin-bottom: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.flux-chart-legend .sw {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  margin-right: 5px;
+  vertical-align: -1px;
+}
+.flux-chart-legend .sw.in { background: #059669; }
+.flux-chart-legend .sw.out { background: #e11d48; }
+.flux-chart-legend .sw.bal {
+  background: transparent;
+  border-radius: 50%;
+  border: 2px solid #0f766e;
+  width: 8px;
+  height: 8px;
+}
+.flux-chart-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 4px;
+}
+.flux-chart {
+  display: block;
+  max-width: none;
+}
+.flux-chart-tick {
+  font-size: 9px;
+  fill: #94a3b8;
+  font-family: inherit;
+  font-weight: 600;
+}
+.flux-chart-hint {
+  margin: 8px 2px 0;
+  font-size: 10px;
+  color: var(--muted);
+  line-height: 1.35;
+}
 .tab.on { background: var(--teal-soft); color: var(--teal-2); }
 .title-row {
   display: flex;
@@ -357,10 +413,27 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 0;
+  width: 100%;
+  margin: 0;
+  padding: 8px 4px;
+  border: 0;
   border-bottom: 1px solid #eef2f6;
+  border-radius: 8px;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
-.pie-leg-row:last-child { border-bottom: 0; padding-bottom: 0; }
+.pie-leg-row:last-child { border-bottom: 0; padding-bottom: 8px; }
+.pie-leg-row:hover,
+.pie-leg-row:focus-visible {
+  background: #f1f5f9;
+  outline: none;
+}
+.pie-leg-row:active { background: #e2e8f0; }
+.chip-cat { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .pie-swatch {
   width: 10px;
   height: 10px;

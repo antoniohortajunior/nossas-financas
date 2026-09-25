@@ -1,4 +1,4 @@
-const APP_VERSION = "43";
+const APP_VERSION = "45";
 const INSTALL_HINT_KEY = "financas-install-hint-v11";
 const KEY = "minhas-financas-config";
 const SCOPE =
@@ -32,6 +32,7 @@ const state = {
   query: "",
   searchHitRow: null,
   filtro: "todas",
+  catFilter: "",
   despSort: "vencimento",
   sheetOpen: false,
   sheetKind: "despesa",
@@ -901,6 +902,10 @@ function despValor(d) {
 
 function filteredDespesasBase() {
   let list = monthDespesas();
+  if (state.catFilter) {
+    const nk = normCat(state.catFilter);
+    list = list.filter((d) => normCat(d.categoria) === nk);
+  }
   if (state.filtro === "pagar") list = list.filter((d) => !d.pago);
   if (state.filtro === "atrasadas") list = list.filter((d) => String(d.status).toLowerCase().includes("atras"));
   return list;
@@ -1342,6 +1347,83 @@ function tabs() {
     </nav>`;
 }
 
+function fluxoDailyChartHtml(rows) {
+  const data = (rows || []).slice().sort((a, b) => a.dia.localeCompare(b.dia));
+  if (!data.length) return "";
+
+  const gW = 28;
+  const pad = { l: 6, r: 10, t: 10, b: 30 };
+  const movH = 92;
+  const salH = 76;
+  const gap = 12;
+  const W = pad.l + data.length * gW + pad.r;
+  const H = pad.t + movH + gap + salH + pad.b;
+  const movBase = pad.t + movH;
+  const salTop = pad.t + movH + gap;
+  const salBase = salTop + salH;
+
+  const maxMov = Math.max(1, ...data.map((r) => Math.max(num(r.despesas), num(r.receitas))));
+  const saldos = data.map((r) => num(r.saldoFinal));
+  let salMin = Math.min(...saldos);
+  let salMax = Math.max(...saldos);
+  const padSal = Math.max((salMax - salMin) * 0.08, 50);
+  salMin -= padSal;
+  salMax += padSal;
+  const salRange = salMax - salMin || 1;
+
+  const svg = [];
+  const barW = 10;
+  data.forEach((r, i) => {
+    const cx = pad.l + i * gW + gW / 2;
+    const rec = num(r.receitas);
+    const desp = num(r.despesas);
+    const rh = rec ? Math.max((rec / maxMov) * (movH - 6), 2) : 0;
+    const dh = desp ? Math.max((desp / maxMov) * (movH - 6), 2) : 0;
+    if (rh) {
+      svg.push(
+        `<rect x="${cx - barW - 1}" y="${movBase - rh}" width="${barW - 2}" height="${rh}" fill="#059669" rx="2" opacity="0.92"/>`
+      );
+    }
+    if (dh) {
+      svg.push(
+        `<rect x="${cx + 2}" y="${movBase - dh}" width="${barW - 2}" height="${dh}" fill="#e11d48" rx="2" opacity="0.92"/>`
+      );
+    }
+    const day = r.dia.slice(8, 10);
+    svg.push(`<text x="${cx}" y="${H - 10}" text-anchor="middle" class="flux-chart-tick">${day}</text>`);
+  });
+
+  const pts = data
+    .map((r, i) => {
+      const cx = pad.l + i * gW + gW / 2;
+      const sy = salBase - ((num(r.saldoFinal) - salMin) / salRange) * (salH - 8);
+      return `${cx},${sy}`;
+    })
+    .join(" ");
+  svg.push(`<line x1="${pad.l}" y1="${salBase}" x2="${W - pad.r}" y2="${salBase}" stroke="#e2e8f0" stroke-width="1"/>`);
+  svg.push(`<polyline points="${pts}" fill="none" stroke="#0f766e" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>`);
+  data.forEach((r, i) => {
+    const cx = pad.l + i * gW + gW / 2;
+    const sy = salBase - ((num(r.saldoFinal) - salMin) / salRange) * (salH - 8);
+    svg.push(`<circle cx="${cx}" cy="${sy}" r="3" fill="#0f766e" stroke="#fff" stroke-width="1.5"/>`);
+  });
+
+  return `
+    <div class="flux-chart-card">
+      <div class="flux-chart-legend">
+        <span><i class="sw in"></i> Entradas</span>
+        <span><i class="sw out"></i> Saídas</span>
+        <span><i class="sw bal"></i> Saldo final</span>
+      </div>
+      <div class="flux-chart-scroll" tabindex="0" aria-label="Gráfico dia a dia: arraste para ver todos os dias">
+        <svg class="flux-chart" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-hidden="true">
+          ${svg.join("")}
+        </svg>
+      </div>
+      <p class="flux-chart-hint">Barras: movimento do dia · linha: saldo ao fim do dia (esquerda → hoje)</p>
+    </div>`;
+}
+
 function fluxoView() {
   const today = todayISO();
   const rows = fluxoRows();
@@ -1381,6 +1463,7 @@ function fluxoView() {
       </div>
       <div class="section">Por dia (mais recente primeiro)</div>
       ${list || `<p class="muted">Defina o mês em Config para ver o fluxo.</p>`}
+      ${rows.length ? `<div class="section">Gráfico do mês</div>${fluxoDailyChartHtml(rows)}` : ""}
     </div>`;
 }
 
@@ -1434,16 +1517,16 @@ function painelCategoriasPieHtml() {
   const legend = slices
     .map(
       (s) => `
-      <div class="pie-leg-row">
+      <button type="button" class="pie-leg-row" data-pie-cat="${esc(s.categoria)}" title="Ver despesas de ${esc(s.categoria)}">
         <span class="pie-swatch" style="background:${s.color}"></span>
         <span class="pie-leg-mid"><b>${esc(s.categoria)}</b><small>${pct(s.pct)}</small></span>
         <span class="pie-leg-val">${brl(s.valor)}</span>
-      </div>`
+      </button>`
     )
     .join("");
   return `
     <div class="pie-card">
-      <p class="pie-hint">Pagas: realizado · em aberto: previsto</p>
+      <p class="pie-hint">Pagas: realizado · em aberto: previsto · toque na categoria para ver os lançamentos</p>
       <div class="pie-layout">
         <div class="pie-wrap">
           <div class="pie-chart" style="background:conic-gradient(${gradient})" role="img" aria-label="Gastos por categoria"></div>
@@ -1563,6 +1646,7 @@ function despesasView() {
         <button class="chip ${state.filtro === "todas" ? "on" : ""}" data-filtro="todas">Todas</button>
         <button class="chip ${state.filtro === "pagar" ? "on" : ""}" data-filtro="pagar">A pagar</button>
         <button class="chip ${state.filtro === "atrasadas" ? "on" : ""}" data-filtro="atrasadas">Atrasadas</button>
+        ${state.catFilter ? `<button type="button" class="chip chip-cat on" data-clear-cat>✕ ${esc(state.catFilter)}</button>` : ""}
       </div>
       ${list || `<div class="empty">Nenhuma despesa neste mês. Toque no + para lançar.</div>`}
     </div>
@@ -2060,10 +2144,30 @@ function bindRootActions() {
       render();
       return;
     }
+    const pieCatBtn = e.target.closest("[data-pie-cat]");
+    if (pieCatBtn) {
+      e.preventDefault();
+      state.catFilter = pieCatBtn.dataset.pieCat || "";
+      state.filtro = "todas";
+      state.query = "";
+      state.searchHitRow = null;
+      state.tab = "despesas";
+      state.sheetOpen = false;
+      render();
+      return;
+    }
+    const clearCatBtn = e.target.closest("[data-clear-cat]");
+    if (clearCatBtn) {
+      e.preventDefault();
+      state.catFilter = "";
+      render();
+      return;
+    }
     const filtroBtn = e.target.closest("[data-filtro]");
     if (filtroBtn) {
       e.preventDefault();
       state.filtro = filtroBtn.dataset.filtro;
+      if (filtroBtn.dataset.filtro !== "todas") state.catFilter = "";
       render();
       return;
     }
