@@ -1,4 +1,4 @@
-const APP_VERSION = "42";
+const APP_VERSION = "43";
 const INSTALL_HINT_KEY = "financas-install-hint-v11";
 const KEY = "minhas-financas-config";
 const SCOPE =
@@ -1384,6 +1384,76 @@ function fluxoView() {
     </div>`;
 }
 
+const PIE_CAT_COLORS = [
+  "#0f766e",
+  "#e11d48",
+  "#d97706",
+  "#7c3aed",
+  "#0284c7",
+  "#059669",
+  "#db2777",
+  "#4f46e5",
+  "#ca8a04",
+  "#64748b",
+];
+
+function categoriasGastoPainel() {
+  const totals = {};
+  monthDespesas().forEach((d) => {
+    const cat = String(d.categoria || "Outros").trim() || "Outros";
+    const v = d.pago ? num(d.realizado) || num(d.previsto) : num(d.previsto);
+    totals[cat] = (totals[cat] || 0) + v;
+  });
+  const entries = Object.entries(totals)
+    .map(([categoria, valor]) => ({ categoria, valor }))
+    .filter((x) => x.valor > 0)
+    .sort((a, b) => b.valor - a.valor);
+  const total = entries.reduce((a, x) => a + x.valor, 0);
+  return { entries, total };
+}
+
+function painelCategoriasPieHtml() {
+  const { entries, total } = categoriasGastoPainel();
+  if (!entries.length) {
+    return `<div class="empty pie-empty">Sem despesas no mês para o gráfico.</div>`;
+  }
+  let acc = 0;
+  const slices = entries.map((e, i) => {
+    const share = (e.valor / total) * 100;
+    const start = acc;
+    acc += share;
+    return {
+      ...e,
+      color: PIE_CAT_COLORS[i % PIE_CAT_COLORS.length],
+      pct: share,
+      start,
+      end: acc,
+    };
+  });
+  const gradient = slices.map((s) => `${s.color} ${s.start}% ${s.end}%`).join(", ");
+  const legend = slices
+    .map(
+      (s) => `
+      <div class="pie-leg-row">
+        <span class="pie-swatch" style="background:${s.color}"></span>
+        <span class="pie-leg-mid"><b>${esc(s.categoria)}</b><small>${pct(s.pct)}</small></span>
+        <span class="pie-leg-val">${brl(s.valor)}</span>
+      </div>`
+    )
+    .join("");
+  return `
+    <div class="pie-card">
+      <p class="pie-hint">Pagas: realizado · em aberto: previsto</p>
+      <div class="pie-layout">
+        <div class="pie-wrap">
+          <div class="pie-chart" style="background:conic-gradient(${gradient})" role="img" aria-label="Gastos por categoria"></div>
+          <div class="pie-hole"><span>${brl(total)}</span><small>total</small></div>
+        </div>
+        <div class="pie-legend">${legend}</div>
+      </div>
+    </div>`;
+}
+
 function painelView(m) {
   return `
     <div class="scroll">
@@ -1425,6 +1495,8 @@ function painelView(m) {
       <div class="alert"><span class="dot" style="background:${m.atrasadas ? "var(--rose)" : m.breve ? "var(--amber)" : "var(--emerald)"}"></span> ${m.atrasadas ? `${m.atrasadas} conta(s) atrasada(s)` : m.breve ? `${m.breve} conta(s) vencem em breve` : "Nenhuma conta atrasada no mês"}</div>
       <div class="alert"><span class="dot" style="background:${m.uso > 1 ? "var(--rose)" : "var(--emerald)"}"></span> ${m.previsto ? (m.uso > 1 ? `O orçamento estourou (${pct(m.uso * 100)} do previsto)` : `Uso do orçamento em ${pct(m.uso * 100)}`) : "Sem despesas previstas no mês"}</div>
       ${m.receitas > 0 ? `<div class="alert"><span class="dot" style="background:${m.taxaPoupancaP >= m.metaPoupancaP ? "var(--emerald)" : "var(--amber)"}"></span> ${m.taxaPoupancaP >= m.metaPoupancaP ? "Meta de poupança no caminho" : `A poupança está abaixo da meta de ${pct(m.metaPoupancaP)} da renda`}</div>` : ""}
+      <div class="section">Gastos por categoria</div>
+      ${painelCategoriasPieHtml()}
       ${state.error ? `<p class="error">${esc(state.error)}</p>` : ""}
       ${state.hint ? `<div class="alert"><span class="dot" style="background:var(--amber)"></span> ${esc(state.hint)}</div>` : ""}
     </div>`;

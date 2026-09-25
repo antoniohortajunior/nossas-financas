@@ -163,7 +163,7 @@ body {
   margin-top: 2px;
 }
 .title-row .title { margin: 0; }
-.sort-btns { display: flex; gap: 6px; flex-shrink: 0; }
+.sort-btns { display: flex; gap: 4px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; max-width: 62%; }
 .sort-btn {
   border: 1px solid var(--line);
   background: #fff;
@@ -312,6 +312,66 @@ body {
 }
 .cat { margin-top: 8px; background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 12px; }
 .cat small { color: var(--muted); }
+.pie-card {
+  margin-top: 8px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 14px;
+}
+.pie-hint {
+  margin: 0 0 12px;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.35;
+}
+.pie-layout { display: flex; flex-direction: column; gap: 14px; align-items: center; }
+.pie-wrap {
+  position: relative;
+  width: 148px;
+  height: 148px;
+  flex-shrink: 0;
+}
+.pie-chart {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+}
+.pie-hole {
+  position: absolute;
+  inset: 22%;
+  background: #fff;
+  border-radius: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 4px;
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.pie-hole span { font-size: 11px; font-weight: 700; line-height: 1.2; }
+.pie-hole small { font-size: 9px; color: var(--muted); text-transform: uppercase; font-weight: 600; }
+.pie-legend { width: 100%; }
+.pie-leg-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid #eef2f6;
+}
+.pie-leg-row:last-child { border-bottom: 0; padding-bottom: 0; }
+.pie-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.pie-leg-mid { flex: 1; min-width: 0; }
+.pie-leg-mid b { display: block; font-size: 13px; font-weight: 600; }
+.pie-leg-mid small { font-size: 11px; color: var(--muted); font-weight: 600; }
+.pie-leg-val { font-size: 13px; font-weight: 700; white-space: nowrap; }
+.pie-empty { margin-top: 8px; }
 .sheet {
   position: fixed;
   inset: 0;
