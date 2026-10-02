@@ -1,4 +1,4 @@
-const APP_VERSION = "46";
+const APP_VERSION = "49";
 const INSTALL_HINT_KEY = "financas-install-hint-v11";
 const KEY = "minhas-financas-config";
 const SCOPE =
@@ -44,6 +44,7 @@ const state = {
   deleteConfirm: null,
   fluxoDias: [],
   ultimaConsolidacao: null,
+  orcamentoOpen: false,
   form: blankForm(),
 };
 
@@ -212,6 +213,49 @@ function truthy(v) {
 
 function receitaRecebida(r) {
   return truthy(r.pago);
+}
+
+function isSheetFormulaError(v) {
+  const s = String(v ?? "").trim();
+  if (!s) return false;
+  const low = s.toLowerCase();
+  if (low.startsWith("#")) return true;
+  return (
+    low === "error" ||
+    low.includes("#error") ||
+    low.includes("#erro") ||
+    low.includes("#n/a") ||
+    low.includes("#valor") ||
+    low.includes("#ref") ||
+    low.includes("#name")
+  );
+}
+
+function cleanSheetStatus(raw) {
+  const s = String(raw ?? "").trim();
+  return s && !isSheetFormulaError(s) ? s : "";
+}
+
+/** Status da receita no app (evita exibir #ERROR! quando a fórmula da planilha quebra). */
+function receitaStatus(r) {
+  const hasLinha = String(r.descricao || r.categoria || "").trim() || num(r.previsto) || num(r.realizado);
+  if (!hasLinha) return "";
+  if (receitaRecebida(r)) return "Recebido";
+  const d = r.vencimento?.slice(0, 10) || "";
+  if (!d) return "A receber";
+  return d < todayISO() ? "Atrasado" : "A receber";
+}
+
+function receitaStatusLabel(r) {
+  const fromSheet = cleanSheetStatus(r.status);
+  if (fromSheet) return fromSheet;
+  return receitaStatus(r) || (r.pago ? "Recebido" : "Pendente");
+}
+
+function despesaStatusLabel(d) {
+  const fromSheet = cleanSheetStatus(d.status);
+  if (fromSheet) return fromSheet;
+  return d.pago ? "Pago" : "Pendente";
 }
 
 function valorReceitaRecebida(r) {
@@ -661,7 +705,7 @@ function parseTables(batch) {
         tipo: String(r[idx.tipo] || ""),
         vencimento: serialToISO(kind === "despesa" ? (r[idx.vencimento] ?? r[5]) : r[idx.vencimento]),
         prioridade: String(r[idx.prioridade] || ""),
-        status: String(r[idx.status] || ""),
+        status: cleanSheetStatus(r[idx.status]),
         previsto: num(kind === "despesa" ? (r[idx.previsto] ?? r[10]) : r[idx.previsto]),
         realizado: num(kind === "despesa" ? (r[idx.realizado] ?? r[11]) : r[idx.realizado]),
         pct: num(r[idx.pct]),
@@ -815,6 +859,77 @@ function monthDespesas() {
 
 function monthReceitas() {
   return state.receitas.filter((d) => inWorkMonth(d));
+}
+
+function transactionMonthKey(d) {
+  const comp = d.competencia?.slice(0, 10);
+  const venc = d.vencimento?.slice(0, 10);
+  if (comp && /^\d{4}-\d{2}-\d{2}$/.test(comp)) return comp.slice(0, 7);
+  if (venc && /^\d{4}-\d{2}-\d{2}$/.test(venc)) return venc.slice(0, 7);
+  const fromComp = ym(d.competencia) || cellYM(d.competenciaRaw);
+  if (fromComp) return fromComp;
+  return ym(d.vencimento) || "";
+}
+
+function workMonthKey() {
+  return `${state.ano}-${String(state.mesNum).padStart(2, "0")}`;
+}
+
+function monthLabelFromKey(key) {
+  const m = Number(String(key).slice(5, 7));
+  const y = String(key).slice(0, 4);
+  if (!m || m < 1 || m > 12) return key;
+  return `${MONTHS[m - 1]} ${y}`;
+}
+
+/** Resumo por mês (receitas/despesas realizadas); saldo encadeado a partir do mês em Config. */
+function mesSummaries() {
+  const buckets = {};
+  const touch = (key) => {
+    if (!key || !/^\d{4}-\d{2}$/.test(key)) return;
+    if (!buckets[key]) buckets[key] = { receitas: 0, despesas: 0 };
+  };
+  state.receitas.forEach((r) => {
+    if (!receitaRecebida(r)) return;
+    const key = transactionMonthKey(r);
+    touch(key);
+    if (buckets[key]) buckets[key].receitas += valorReceitaRecebida(r);
+  });
+  state.despesas.forEach((d) => {
+    if (!d.pago) return;
+    const key = transactionMonthKey(d);
+    touch(key);
+    if (buckets[key]) buckets[key].despesas += num(d.realizado) || 0;
+  });
+  const keys = Object.keys(buckets).sort();
+  const rows = keys.map((key) => ({
+    key,
+    label: monthLabelFromKey(key),
+    receitas: buckets[key].receitas,
+    despesas: buckets[key].despesas,
+    saldoInicial: null,
+    saldoFinal: null,
+  }));
+  const workKey = workMonthKey();
+  const wi = rows.findIndex((r) => r.key === workKey);
+  if (wi >= 0) {
+    let saldo = Number(state.saldoInicial) || 0;
+    rows[wi].saldoInicial = saldo;
+    rows[wi].saldoFinal = saldo + rows[wi].receitas - rows[wi].despesas;
+    saldo = rows[wi].saldoFinal;
+    for (let i = wi + 1; i < rows.length; i++) {
+      rows[i].saldoInicial = saldo;
+      rows[i].saldoFinal = saldo + rows[i].receitas - rows[i].despesas;
+      saldo = rows[i].saldoFinal;
+    }
+    for (let i = wi - 1; i >= 0; i--) {
+      const nextIni = rows[i + 1].saldoInicial;
+      if (nextIni == null) break;
+      rows[i].saldoFinal = nextIni;
+      rows[i].saldoInicial = rows[i].saldoFinal - rows[i].receitas + rows[i].despesas;
+    }
+  }
+  return rows.slice().reverse();
 }
 
 function isOrcamentoDataRow(categoria) {
@@ -1249,7 +1364,7 @@ function receitasMetrics() {
   return {
     previsto: rs.reduce((a, x) => a + x.previsto, 0),
     realizado: receitasRecebidasTotal(),
-    atrasadas: rs.filter((x) => String(x.status).toLowerCase().includes("atras")).length,
+    atrasadas: rs.filter((x) => receitaStatusLabel(x).toLowerCase().includes("atras")).length,
   };
 }
 
@@ -1281,19 +1396,9 @@ function isFullscreenActive() {
   );
 }
 
-function isNonStandardPort() {
-  const port = window.location.port;
-  return port !== "" && port !== "443" && port !== "80";
-}
-
 function shouldShowFullscreenControl() {
   if (!isMobile() || isFullscreenActive()) return false;
   if (isIOS()) return !window.navigator.standalone;
-  if (isAndroid()) {
-    if (isNonStandardPort()) return true;
-    if (!isStandalone()) return true;
-    return window.location.protocol === "http:";
-  }
   return !isStandalone();
 }
 
@@ -1314,24 +1419,13 @@ function enterFullscreen() {
 
 function renderInstallHint() {
   if (localStorage.getItem(INSTALL_HINT_KEY) === "1") return "";
-  if (!isMobile()) return "";
-  if (isStandalone() && !isNonStandardPort() && window.location.protocol === "https:") return "";
+  if (!isMobile() || isStandalone()) return "";
 
   let msg =
-    "Menu ⋮ → <strong>Instalar app</strong> (ou Adicionar à tela inicial) e abra pelo ícone <strong>Finanças</strong>.";
+    "Menu ⋮ → <strong>Instalar app</strong> (ou Adicionar à tela inicial) e abra pelo ícone <strong>Finanças</strong>. Se a barra do Chrome aparecer, use <strong>Tela cheia</strong> ou <strong>⛶</strong> no topo.";
   if (isIOS()) {
     msg =
       "No iPhone, abra no <strong>Safari</strong> → Compartilhar → <strong>Adicionar à Tela de Início</strong> (não use o Chrome).";
-  } else if (isNonStandardPort()) {
-    msg =
-      "Pela porta não padrão, o Chrome pode manter a barra. Toque em <strong>Tela cheia</strong> abaixo ou no botão <strong>⛶</strong> no topo.";
-  } else if (window.location.protocol === "https:") {
-    msg =
-      "Instale pelo menu ⋮ → <strong>Instalar app</strong>. Se a barra do Chrome aparecer, use <strong>Tela cheia</strong> ou <strong>⛶</strong> no topo.";
-  } else if (window.location.protocol === "http:") {
-    msg = isStandalone()
-      ? "Abra pelo ícone <strong>Finanças</strong> na tela inicial. Para sumir a barra de vez, use <strong>HTTPS</strong>."
-      : "Adicione à tela inicial (Menu ⋮ → Instalar app). Se a barra aparecer, use <strong>Tela cheia</strong> ou <strong>⛶</strong> no topo.";
   }
 
   return `
@@ -1397,7 +1491,7 @@ function tabs() {
       <button class="tab ${state.tab === "fluxo" ? "on" : ""}" data-tab="fluxo">Fluxo</button>
       <button class="tab ${state.tab === "despesas" ? "on" : ""}" data-tab="despesas">Despesas</button>
       <button class="tab ${state.tab === "receitas" ? "on" : ""}" data-tab="receitas">Receitas</button>
-      <button class="tab ${state.tab === "orcamento" ? "on" : ""}" data-tab="orcamento">Orç.</button>
+      <button class="tab ${state.tab === "mes" ? "on" : ""}" data-tab="mes">Mês</button>
     </nav>`;
 }
 
@@ -1600,11 +1694,11 @@ function painelView(m) {
       <div class="topbar">
         <div class="hello">Olá, ${esc(state.nome)} <span class="app-ver">v${APP_VERSION}</span></div>
         <div class="topbar-actions">
+          <button type="button" class="btn-orc-mini" id="btnOrcamento">orçamento</button>
           ${renderFullscreenBarBtn()}
           <button class="linkish" id="btnReload">${state.loading ? "Atualizando…" : "Atualizar"}</button>
         </div>
       </div>
-      <div class="title">${esc(state.mes)} ${esc(state.ano)}</div>
       <div class="hero hero-sobrando">
         <div class="lbl">Sobrando</div>
         <div class="val">${brl(m.sobrando)}</div>
@@ -1641,7 +1735,7 @@ function painelView(m) {
     </div>`;
 }
 
-function orcamentoView(m) {
+function orcamentoBody(m) {
   const rows = state.orcamento
     .filter((o) => isOrcamentoDataRow(o.categoria))
     .map((o) => {
@@ -1657,9 +1751,6 @@ function orcamentoView(m) {
     .join("");
   const deg = Math.min(m.usoLimite, 1) * 360;
   return `
-    <div class="scroll">
-      <div class="hello">Uso do limite</div>
-      <div class="title">Orçamento</div>
       <div class="ring-wrap">
         <div class="ring" style="background:conic-gradient(var(--teal) 0 ${deg}deg,#e2e8f0 ${deg}deg 360deg)"><i>${Math.round(m.usoLimite * 100)}%</i></div>
         <div>
@@ -1669,7 +1760,62 @@ function orcamentoView(m) {
         </div>
       </div>
       <div class="section">Por categoria</div>
-      ${rows || `<div class="empty">Sem categorias neste mês.</div>`}
+      ${rows || `<div class="empty">Sem categorias neste mês.</div>`}`;
+}
+
+function orcamentoOverlay(m) {
+  return `
+    <div class="sheet orc-sheet ${state.orcamentoOpen ? "open" : ""}" id="orcSheet">
+      <div class="sheet-head">
+        <h2>Orçamento</h2>
+        <div class="sheet-head-actions">
+          <button type="button" class="ghost" id="closeOrcamento" aria-label="Fechar">×</button>
+        </div>
+      </div>
+      <div class="sheet-body">${orcamentoBody(m)}</div>
+    </div>`;
+}
+
+function mesMoneyCell(n) {
+  return n == null ? "—" : brl(n);
+}
+
+function mesView() {
+  const rows = mesSummaries();
+  const workKey = workMonthKey();
+  const body = rows
+    .map((r) => {
+      const on = r.key === workKey ? " mes-row-on" : "";
+      return `<tr class="${on}">
+        <td>${esc(r.label)}</td>
+        <td>${mesMoneyCell(r.saldoInicial)}</td>
+        <td class="in">${brl(r.receitas)}</td>
+        <td class="out">${brl(r.despesas)}</td>
+        <td><b>${mesMoneyCell(r.saldoFinal)}</b></td>
+      </tr>`;
+    })
+    .join("");
+  return `
+    <div class="scroll">
+      <div class="hello">Totais realizados</div>
+      <div class="title">Mês</div>
+      <p class="mes-hint">Receitas recebidas e despesas pagas por competência/vencimento. Saldo inicial do mês em Config (B12); meses seguintes encadeiam o saldo final.</p>
+      <div class="mes-table-wrap">
+        <table class="mes-table">
+          <thead>
+            <tr>
+              <th>Mês</th>
+              <th>Saldo inicial</th>
+              <th>Receitas</th>
+              <th>Despesas</th>
+              <th>Saldo final</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${body || `<tr><td colspan="5" class="mes-empty">Nenhum lançamento realizado encontrado.</td></tr>`}
+          </tbody>
+        </table>
+      </div>
     </div>`;
 }
 
@@ -1681,7 +1827,7 @@ function despesasView() {
       <div class="item${d.sheetRow === hit ? " search-hit" : ""}" data-row="${d.sheetRow}" data-kind="despesa" role="button" tabindex="0">
         <span class="check ${d.pago ? "yes" : ""}" data-toggle="${d.sheetRow}">${d.pago ? "✓" : ""}</span>
         <span class="mid"><b>${esc(d.descricao || "(sem descrição)")}</b><small>${despSubline(d)}</small></span>
-        <span class="right"><b>${brl(despValor(d))}</b><span class="pill ${pillClass(d.status)}">${esc(d.status || (d.pago ? "Pago" : "Pendente"))}</span></span>
+        <span class="right"><b>${brl(despValor(d))}</b><span class="pill ${pillClass(despesaStatusLabel(d))}">${esc(despesaStatusLabel(d))}</span></span>
       </div>`
     )
     .join("");
@@ -1723,7 +1869,7 @@ function receitasView() {
       <button type="button" class="item" data-row="${r.sheetRow}" data-kind="receita">
         <span class="check ${r.pago ? "yes" : ""}" data-toggle-rec="${r.sheetRow}">${r.pago ? "✓" : ""}</span>
         <span class="mid"><b>${esc(r.descricao || r.categoria || "(sem descrição)")}</b><small>${esc(r.categoria)} · ${r.vencimento ? isoToBR(r.vencimento) : ""}</small></span>
-        <span class="right"><b>${brl(r.pago ? r.realizado || r.previsto : r.previsto)}</b><span class="pill ${pillClass(r.status)}">${esc(r.status || (r.pago ? "Recebido" : "Pendente"))}</span></span>
+        <span class="right"><b>${brl(r.pago ? r.realizado || r.previsto : r.previsto)}</b><span class="pill ${pillClass(receitaStatusLabel(r))}">${esc(receitaStatusLabel(r))}</span></span>
       </button>`
     )
     .join("");
@@ -1833,10 +1979,11 @@ function appView() {
   let body = "";
   if (state.tab === "painel") body = painelView(m);
   if (state.tab === "fluxo") body = fluxoView();
-  if (state.tab === "orcamento") body = orcamentoView(m);
+  if (state.tab === "mes") body = mesView();
   if (state.tab === "despesas") body = despesasView();
   if (state.tab === "receitas") body = receitasView();
-  return `<div class="app ${state.loading ? "busy" : ""}">${body}${tabs()}${sheetView()}
+  const orc = state.orcamentoOpen ? orcamentoOverlay(m) : "";
+  return `<div class="app ${state.loading ? "busy" : ""}">${body}${tabs()}${orc}${sheetView()}
     <div class="toast ${state.toast ? "show" : ""}">${esc(state.toast)}</div></div>`;
 }
 
@@ -2237,6 +2384,7 @@ function bindRootActions() {
     if (tabBtn) {
       state.tab = tabBtn.dataset.tab;
       state.sheetOpen = false;
+      state.orcamentoOpen = false;
       state.deleteConfirm = null;
       render();
       return;
@@ -2314,6 +2462,15 @@ function bind() {
   });
 
   on("btnReload", "click", () => refresh());
+  on("btnOrcamento", "click", () => {
+    state.orcamentoOpen = true;
+    state.sheetOpen = false;
+    render();
+  });
+  on("closeOrcamento", "click", () => {
+    state.orcamentoOpen = false;
+    render();
+  });
   on("fab", "click", () => openNew("despesa"));
   on("fabRec", "click", () => openNew("receita"));
   on("closeSheet", "click", () => {
