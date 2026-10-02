@@ -1,4 +1,4 @@
-const APP_VERSION = "49";
+const APP_VERSION = "50";
 const INSTALL_HINT_KEY = "financas-install-hint-v11";
 const KEY = "minhas-financas-config";
 const SCOPE =
@@ -875,61 +875,11 @@ function workMonthKey() {
   return `${state.ano}-${String(state.mesNum).padStart(2, "0")}`;
 }
 
-function monthLabelFromKey(key) {
+function monthLabelShort(key) {
   const m = Number(String(key).slice(5, 7));
-  const y = String(key).slice(0, 4);
+  const yy = String(key).slice(2, 4);
   if (!m || m < 1 || m > 12) return key;
-  return `${MONTHS[m - 1]} ${y}`;
-}
-
-/** Resumo por mês (receitas/despesas realizadas); saldo encadeado a partir do mês em Config. */
-function mesSummaries() {
-  const buckets = {};
-  const touch = (key) => {
-    if (!key || !/^\d{4}-\d{2}$/.test(key)) return;
-    if (!buckets[key]) buckets[key] = { receitas: 0, despesas: 0 };
-  };
-  state.receitas.forEach((r) => {
-    if (!receitaRecebida(r)) return;
-    const key = transactionMonthKey(r);
-    touch(key);
-    if (buckets[key]) buckets[key].receitas += valorReceitaRecebida(r);
-  });
-  state.despesas.forEach((d) => {
-    if (!d.pago) return;
-    const key = transactionMonthKey(d);
-    touch(key);
-    if (buckets[key]) buckets[key].despesas += num(d.realizado) || 0;
-  });
-  const keys = Object.keys(buckets).sort();
-  const rows = keys.map((key) => ({
-    key,
-    label: monthLabelFromKey(key),
-    receitas: buckets[key].receitas,
-    despesas: buckets[key].despesas,
-    saldoInicial: null,
-    saldoFinal: null,
-  }));
-  const workKey = workMonthKey();
-  const wi = rows.findIndex((r) => r.key === workKey);
-  if (wi >= 0) {
-    let saldo = Number(state.saldoInicial) || 0;
-    rows[wi].saldoInicial = saldo;
-    rows[wi].saldoFinal = saldo + rows[wi].receitas - rows[wi].despesas;
-    saldo = rows[wi].saldoFinal;
-    for (let i = wi + 1; i < rows.length; i++) {
-      rows[i].saldoInicial = saldo;
-      rows[i].saldoFinal = saldo + rows[i].receitas - rows[i].despesas;
-      saldo = rows[i].saldoFinal;
-    }
-    for (let i = wi - 1; i >= 0; i--) {
-      const nextIni = rows[i + 1].saldoInicial;
-      if (nextIni == null) break;
-      rows[i].saldoFinal = nextIni;
-      rows[i].saldoInicial = rows[i].saldoFinal - rows[i].receitas + rows[i].despesas;
-    }
-  }
-  return rows.slice().reverse();
+  return `${String(m).padStart(2, "0")}/${yy}`;
 }
 
 function isOrcamentoDataRow(categoria) {
@@ -1264,6 +1214,174 @@ function fluxoRows() {
       });
   }
   return computed.filter((r) => r.dia <= today);
+}
+
+function addDaysISO(iso, delta) {
+  const d = new Date(`${iso.slice(0, 10)}T12:00:00`);
+  d.setDate(d.getDate() + delta);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function iterDaysISO(from, to) {
+  const out = [];
+  if (!from || !to || from > to) return out;
+  let cur = from.slice(0, 10);
+  const end = to.slice(0, 10);
+  while (cur <= end) {
+    out.push(cur);
+    cur = addDaysISO(cur, 1);
+  }
+  return out;
+}
+
+function lastDayOfMonthKey(key) {
+  const y = Number(key.slice(0, 4));
+  const m = Number(key.slice(5, 7));
+  if (!y || !m) return "";
+  const d = new Date(y, m, 0, 12, 0, 0);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function firstDayOfMonthKey(key) {
+  return `${key}-01`;
+}
+
+function calendarMonthKeyNow() {
+  return todayISO().slice(0, 7);
+}
+
+/** Saldos diários pelo fluxo (data de pgto/recebimento); âncora = 1º dia do mês em Config (B12). */
+function buildCashSaldoByDay() {
+  const anchor = state.mesStart?.slice(0, 10);
+  const anchorSaldo = Number(state.saldoInicial) || 0;
+  const deltas = {};
+  const touch = (day) => {
+    if (!day || day.length < 10) return;
+    if (!deltas[day]) deltas[day] = { receitas: 0, despesas: 0 };
+  };
+
+  state.despesas.forEach((d) => {
+    if (!d.pago) return;
+    const day = despPgtoDate(d);
+    if (!day) return;
+    touch(day);
+    deltas[day].despesas += num(d.realizado) || 0;
+  });
+  state.receitas.forEach((r) => {
+    if (!receitaRecebida(r)) return;
+    const day = fluxoRecDate(r) || recRecebDate(r);
+    if (!day) return;
+    touch(day);
+    deltas[day].receitas += valorReceitaRecebida(r);
+  });
+
+  const fluxoMap = Object.fromEntries(fluxoRows().map((r) => [r.dia.slice(0, 10), r]));
+  const movDays = Object.keys(deltas).sort();
+  const today = todayISO();
+
+  if (!anchor) {
+    return { saldoStart: {}, saldoEnd: {}, deltas, anchor: "", today };
+  }
+
+  let minD = anchor;
+  let maxD = today;
+  for (const day of movDays) {
+    if (day < minD) minD = day;
+    if (day > maxD) maxD = day;
+  }
+  minD = firstDayOfMonthKey(minD.slice(0, 7));
+  const maxMonth = maxD.slice(0, 7);
+  const monthEnd = lastDayOfMonthKey(maxMonth);
+  if (monthEnd && monthEnd > maxD) maxD = monthEnd;
+
+  const days = iterDaysISO(minD, maxD);
+  const anchorIdx = days.indexOf(anchor);
+  const saldoStart = {};
+  const saldoEnd = {};
+
+  if (anchorIdx < 0) {
+    return { saldoStart, saldoEnd, deltas, anchor, today };
+  }
+
+  const applyDay = (day, startVal) => {
+    const flux = fluxoMap[day];
+    const mov = deltas[day] || { receitas: 0, despesas: 0 };
+    if (flux && state.fluxoFromSheet && flux.saldoInicial != null && flux.saldoFinal != null) {
+      saldoStart[day] = num(flux.saldoInicial);
+      saldoEnd[day] = num(flux.saldoFinal);
+      return;
+    }
+    saldoStart[day] = startVal;
+    saldoEnd[day] = startVal + mov.receitas - mov.despesas;
+  };
+
+  applyDay(anchor, anchorSaldo);
+
+  for (let i = anchorIdx + 1; i < days.length; i++) {
+    const day = days[i];
+    const prev = days[i - 1];
+    const start = saldoEnd[prev] ?? saldoStart[prev] ?? 0;
+    applyDay(day, start);
+  }
+  for (let i = anchorIdx - 1; i >= 0; i--) {
+    const day = days[i];
+    const next = days[i + 1];
+    const startNext = saldoStart[next];
+    if (startNext == null) continue;
+    const mov = deltas[day] || { receitas: 0, despesas: 0 };
+    saldoEnd[day] = startNext;
+    saldoStart[day] = saldoEnd[day] - mov.receitas + mov.despesas;
+  }
+
+  return { saldoStart, saldoEnd, deltas, anchor, today };
+}
+
+/** Resumo mensal: movimentação por data de pgto/recebimento; saldos do 1º dia e fim do mês (ou até hoje no mês corrente). */
+function mesSummaries() {
+  const { saldoStart, saldoEnd, deltas, today } = buildCashSaldoByDay();
+  const monthKeys = new Set();
+  Object.keys(deltas).forEach((day) => monthKeys.add(day.slice(0, 7)));
+  const anchorKey = state.mesStart?.slice(0, 7);
+  if (anchorKey) monthKeys.add(anchorKey);
+
+  const keys = [...monthKeys].filter((k) => /^\d{4}-\d{2}$/.test(k)).sort();
+  const curMonth = calendarMonthKeyNow();
+
+  const rows = keys.map((key) => {
+    let receitas = 0;
+    let despesas = 0;
+    for (const [day, mov] of Object.entries(deltas)) {
+      if (day.slice(0, 7) !== key) continue;
+      receitas += mov.receitas;
+      despesas += mov.despesas;
+    }
+    const day1 = firstDayOfMonthKey(key);
+    const isCurrent = key === curMonth;
+    const monthLast = lastDayOfMonthKey(key);
+    const endDay = isCurrent ? (today < monthLast ? today : monthLast) : monthLast;
+
+    let saldoInicial = saldoStart[day1];
+    if (saldoInicial == null && saldoEnd[day1] != null) {
+      const mov0 = deltas[day1] || { receitas: 0, despesas: 0 };
+      saldoInicial = saldoEnd[day1] - mov0.receitas + mov0.despesas;
+    }
+    let saldoFinal = saldoEnd[endDay];
+    if (saldoFinal == null && saldoInicial != null) {
+      saldoFinal = saldoInicial + receitas - despesas;
+    }
+
+    return {
+      key,
+      label: monthLabelShort(key),
+      receitas,
+      despesas,
+      saldoInicial: saldoInicial ?? null,
+      saldoFinal: saldoFinal ?? null,
+      isCurrent,
+    };
+  });
+
+  return rows.slice().reverse();
 }
 
 function despSubline(d) {
@@ -1785,7 +1903,7 @@ function mesView() {
   const workKey = workMonthKey();
   const body = rows
     .map((r) => {
-      const on = r.key === workKey ? " mes-row-on" : "";
+      const on = r.key === workKey || r.isCurrent ? " mes-row-on" : "";
       return `<tr class="${on}">
         <td>${esc(r.label)}</td>
         <td>${mesMoneyCell(r.saldoInicial)}</td>
@@ -1799,16 +1917,16 @@ function mesView() {
     <div class="scroll">
       <div class="hello">Totais realizados</div>
       <div class="title">Mês</div>
-      <p class="mes-hint">Receitas recebidas e despesas pagas por competência/vencimento. Saldo inicial do mês em Config (B12); meses seguintes encadeiam o saldo final.</p>
+      <p class="mes-hint">Receitas e despesas pela data de recebimento/pagamento. SaldoIni no 1º dia do mês (Config no mês selecionado). SaldoFin no último dia do mês ou até hoje no mês corrente.</p>
       <div class="mes-table-wrap">
         <table class="mes-table">
           <thead>
             <tr>
               <th>Mês</th>
-              <th>Saldo inicial</th>
+              <th>SaldoIni</th>
               <th>Receitas</th>
               <th>Despesas</th>
-              <th>Saldo final</th>
+              <th>SaldoFin</th>
             </tr>
           </thead>
           <tbody>
