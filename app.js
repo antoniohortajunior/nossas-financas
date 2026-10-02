@@ -1,4 +1,4 @@
-const APP_VERSION = "50";
+const APP_VERSION = "51";
 const INSTALL_HINT_KEY = "financas-install-hint-v11";
 const KEY = "minhas-financas-config";
 const SCOPE =
@@ -122,6 +122,31 @@ function normalizeClientId(input) {
 function brl(n) {
   const v = Number(n) || 0;
   return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+}
+
+/** Valores curtos para a grade Mês (sem R$; k/M acima de 10 mil). */
+function brlShort(n) {
+  const v = Number(n) || 0;
+  const abs = Math.abs(v);
+  const sign = v < 0 ? "−" : "";
+  if (abs >= 1_000_000) {
+    const x = abs / 1_000_000;
+    const s = x >= 10 ? String(Math.round(x)) : x.toFixed(1).replace(".", ",");
+    return `${sign}${s}M`;
+  }
+  if (abs >= 10_000) {
+    const x = abs / 1000;
+    const s = x >= 100 ? String(Math.round(x)) : x.toFixed(1).replace(".", ",");
+    return `${sign}${s}k`;
+  }
+  const cents = abs < 1000 && abs % 1 !== 0;
+  return (
+    sign +
+    abs.toLocaleString("pt-BR", {
+      minimumFractionDigits: cents ? 2 : 0,
+      maximumFractionDigits: cents ? 2 : 0,
+    })
+  );
 }
 
 function pct(n) {
@@ -1894,8 +1919,11 @@ function orcamentoOverlay(m) {
     </div>`;
 }
 
-function mesMoneyCell(n) {
-  return n == null ? "—" : brl(n);
+function mesMoneyCell(n, full) {
+  if (n == null) return "—";
+  const short = brlShort(n);
+  if (!full) return short;
+  return `<span title="${esc(full)}">${esc(short)}</span>`;
 }
 
 function mesView() {
@@ -1904,12 +1932,16 @@ function mesView() {
   const body = rows
     .map((r) => {
       const on = r.key === workKey || r.isCurrent ? " mes-row-on" : "";
+      const fullIni = r.saldoInicial != null ? brl(r.saldoInicial) : "";
+      const fullFin = r.saldoFinal != null ? brl(r.saldoFinal) : "";
+      const fullRec = brl(r.receitas);
+      const fullDesp = brl(r.despesas);
       return `<tr class="${on}">
         <td>${esc(r.label)}</td>
-        <td>${mesMoneyCell(r.saldoInicial)}</td>
-        <td class="in">${brl(r.receitas)}</td>
-        <td class="out">${brl(r.despesas)}</td>
-        <td><b>${mesMoneyCell(r.saldoFinal)}</b></td>
+        <td>${r.saldoInicial != null ? mesMoneyCell(r.saldoInicial, fullIni) : "—"}</td>
+        <td class="in"><span title="${esc(fullRec)}">${esc(brlShort(r.receitas))}</span></td>
+        <td class="out"><span title="${esc(fullDesp)}">${esc(brlShort(r.despesas))}</span></td>
+        <td><b>${r.saldoFinal != null ? mesMoneyCell(r.saldoFinal, fullFin) : "—"}</b></td>
       </tr>`;
     })
     .join("");
