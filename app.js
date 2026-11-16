@@ -1,4 +1,4 @@
-const APP_VERSION = "54";
+const APP_VERSION = "55";
 const PAINEL_PERIOD_KEY = "financas-painel-period-v1";
 const INSTALL_HINT_KEY = "financas-install-hint-v11";
 const KEY = "minhas-financas-config";
@@ -53,7 +53,7 @@ const state = {
   orcamentoOpen: false,
   categoriaSheetOpen: false,
   categoriaEditingRow: null,
-  categoriaForm: { nome: "", limite: "" },
+  categoriaForm: { nome: "", limite: "", vinculo: "despesas" },
   form: blankForm(),
 };
 
@@ -580,6 +580,25 @@ function normCat(s) {
     .replace(/[\u0300-\u036f]/g, "");
 }
 
+function normalizeCatVinculo(v) {
+  const s = normCat(v);
+  return s === "alasca" ? "alasca" : "despesas";
+}
+
+function vinculoPlanilha(vinculo) {
+  return normalizeCatVinculo(vinculo) === "alasca" ? "Alasca" : "Despesas";
+}
+
+function categoriasNomesForKind(kind) {
+  const want = kind === "alasca" ? "alasca" : "despesas";
+  const nomes = state.categorias
+    .filter((c) => normalizeCatVinculo(c.vinculo) === want)
+    .map((c) => c.categoria);
+  if (nomes.length) return nomes;
+  if (want === "despesas") return state.categorias.map((c) => c.categoria);
+  return [];
+}
+
 function listasCatalogStart(listas) {
   for (let i = 0; i < listas.length; i++) {
     const row = listas[i] || [];
@@ -694,6 +713,7 @@ function parseTables(batch) {
         realizado: num(r[3]),
         pct: num(r[4]),
         situacao: String(r[5] || "").trim(),
+        vinculo: normalizeCatVinculo(r[6]),
       });
     }
     return { headerRow, rows };
@@ -704,13 +724,18 @@ function parseTables(batch) {
   state.categorias = catParsed.rows;
   const cats = catParsed.rows;
   const limitesPorCategoria = {};
-  const nomes = [];
+  const nomesDesp = [];
+  const nomesAla = [];
   for (const c of cats) {
-    nomes.push(c.categoria);
+    if (normalizeCatVinculo(c.vinculo) === "alasca") nomesAla.push(c.categoria);
+    else nomesDesp.push(c.categoria);
     if (c.limite) limitesPorCategoria[c.categoria] = c.limite;
   }
+  const nomes = nomesDesp.length ? nomesDesp : cats.map((c) => c.categoria);
   state.listas = {
     categorias: nomes.length ? nomes : pickCol(0),
+    categoriasDespesas: nomesDesp,
+    categoriasAlasca: nomesAla,
     classesPorCategoria: {},
     limitesPorCategoria,
     tipos: pickCol(0).length ? pickCol(0) : ["Fixo", "Variável", "Assinatura"],
@@ -895,7 +920,7 @@ async function refresh() {
     const data = await batchGetRanges([
       "Config!B4:B14",
       "Despesas!A1:U400",
-      "Categorias!A1:F60",
+      "Categorias!A1:G60",
       "Listas!G4:N20",
     ]);
     try {
@@ -1061,7 +1086,9 @@ function metrics() {
   const pagar = ds.filter((x) => !x.pago).reduce((a, x) => a + x.previsto, 0);
   const atrasadas = ds.filter((x) => String(x.status).toLowerCase().includes("atras")).length;
   const breve = ds.filter((x) => String(x.status).toLowerCase().includes("breve")).length;
-  const limite = state.categorias.reduce((a, x) => a + (x.limite || 0), 0);
+  const limite = state.categorias
+    .filter((x) => normalizeCatVinculo(x.vinculo) === (state.painelFonte === "alasca" ? "alasca" : "despesas"))
+    .reduce((a, x) => a + (x.limite || 0), 0);
   return {
     previsto,
     realizado,
@@ -1751,6 +1778,7 @@ function openCategoriaEdit(sheetRow) {
   state.categoriaForm = {
     nome: c.categoria,
     limite: fmtMoneyInput(c.limite),
+    vinculo: normalizeCatVinculo(c.vinculo),
   };
   state.categoriaSheetOpen = true;
   render();
@@ -1758,7 +1786,7 @@ function openCategoriaEdit(sheetRow) {
 
 function openNewCategoria() {
   state.categoriaEditingRow = null;
-  state.categoriaForm = { nome: "", limite: "" };
+  state.categoriaForm = { nome: "", limite: "", vinculo: "despesas" };
   state.categoriaSheetOpen = true;
   render();
 }
@@ -1770,6 +1798,7 @@ async function saveCategoriaSheet() {
     return;
   }
   const limite = num(state.categoriaForm.limite);
+  const vinculo = vinculoPlanilha(state.categoriaForm.vinculo);
   const row = state.categoriaEditingRow || firstEmptyCategoriaRow();
   state.loading = true;
   state.categoriaSheetOpen = false;
@@ -1782,6 +1811,7 @@ async function saveCategoriaSheet() {
         data: [
           { range: `Categorias!A${row}`, values: [[nome]] },
           { range: `Categorias!B${row}`, values: [[limite]] },
+          { range: `Categorias!G${row}`, values: [[vinculo]] },
         ],
       }),
     });
@@ -1807,7 +1837,7 @@ function categoriasView() {
       <button type="button" class="cat-item" data-cat-row="${c.sheetRow}">
         <span>
           <b>${esc(c.categoria)}</b>
-          <small>Orçamento ${brl(c.limite)} · pago ${brl(c.realizado)}</small>
+          <small>${normalizeCatVinculo(c.vinculo) === "alasca" ? "Alasca" : "Despesas"} · orçamento ${brl(c.limite)} · pago ${brl(c.realizado)}</small>
         </span>
         <span class="cat-amt">${esc(c.situacao || "—")}</span>
       </button>`
@@ -1821,7 +1851,7 @@ function categoriasView() {
           <button class="linkish" id="btnReloadCat">${state.loading ? "…" : "Atualizar"}</button>
         </div>
       </div>
-      <p class="muted" style="font-size:12px;margin-top:6px">Toque para editar nome e orçamento mensal na planilha.</p>
+      <p class="muted" style="font-size:12px;margin-top:6px">Toque para editar nome, orçamento e se a categoria é de Despesas ou Alasca.</p>
       <button type="button" class="save" id="btnNovaCategoria" style="margin-top:14px">Nova categoria</button>
       ${rows || `<div class="empty" style="margin-top:16px">Nenhuma categoria na aba Categorias.</div>`}
     </div>`;
@@ -1841,6 +1871,10 @@ function categoriaSheetView() {
       <div class="sheet-body">
         <div class="field"><label>Nome</label><input id="fCatNome" value="${esc(f.nome)}" autocomplete="off" /></div>
         <div class="field"><label>Orçamento mensal (R$)</label><input id="fCatLimite" inputmode="decimal" value="${esc(f.limite)}" /></div>
+        <div class="field"><label>Vinculado a</label><select id="fCatVinculo">
+          <option value="despesas" ${normalizeCatVinculo(f.vinculo) === "despesas" ? "selected" : ""}>Despesas</option>
+          <option value="alasca" ${normalizeCatVinculo(f.vinculo) === "alasca" ? "selected" : ""}>Alasca</option>
+        </select></div>
       </div>
       <button class="save" id="saveCatBtn">${state.loading ? "Salvando…" : "Salvar na planilha"}</button>
     </div>`;
@@ -2266,6 +2300,13 @@ function sheetView() {
   const L = state.listas;
   const isRec = state.sheetKind === "receita";
   const isAlaska = state.sheetKind === "alasca";
+  const catOpts = isAlaska
+    ? L.categoriasAlasca?.length
+      ? L.categoriasAlasca
+      : categoriasNomesForKind("alasca")
+    : L.categoriasDespesas?.length
+      ? L.categoriasDespesas
+      : L.categorias;
   const body = isRec
     ? `
         <div class="field"><label>Descrição</label><input id="fDesc" value="${esc(f.descricao)}" placeholder="Ex.: Salário março" /></div>
@@ -2287,7 +2328,7 @@ function sheetView() {
         </div>`
     : `
         <div class="field"><label>Descrição</label><input id="fDesc" value="${esc(f.descricao)}" placeholder="Ex.: IPTU casa da praia" /></div>
-        <div class="field"><label>Categoria</label><select id="fCat">${options(L.categorias, f.categoria)}</select></div>
+        <div class="field"><label>Categoria</label><select id="fCat">${options(catOpts, f.categoria)}</select></div>
         <div class="row2">
           <div class="field"><label>Previsto</label><input id="fPrev" inputmode="decimal" value="${esc(f.previsto)}" placeholder="0,00" /></div>
           <div class="field"><label>Vencimento</label><input id="fVenc" type="date" value="${esc(f.vencimento)}" /></div>
@@ -2427,8 +2468,11 @@ function openNew(kind = "despesa") {
   state.moreOpen = false;
   state.sheetKind = kind;
   state.form = blankForm(kind);
-  if ((kind === "despesa" || kind === "alasca") && state.listas.categorias[0]) {
-    state.form.categoria = state.listas.categorias[0];
+  if (kind === "despesa" || kind === "alasca") {
+    const opts = kind === "alasca" ? state.listas.categoriasAlasca : state.listas.categoriasDespesas;
+    const fallback = state.listas.categorias;
+    const pick = (opts && opts[0]) || (fallback && fallback[0]);
+    if (pick) state.form.categoria = pick;
   }
   if (kind === "receita" && state.listas.fontes[0]) state.form.fonte = state.listas.fontes[0];
   state.sheetOpen = true;
@@ -2893,6 +2937,7 @@ function bind() {
     const $ = (id) => document.getElementById(id);
     if ($("fCatNome")) state.categoriaForm.nome = $("fCatNome").value;
     if ($("fCatLimite")) state.categoriaForm.limite = $("fCatLimite").value;
+    if ($("fCatVinculo")) state.categoriaForm.vinculo = $("fCatVinculo").value;
     saveCategoriaSheet();
   });
   on("closeOrcamento", "click", () => {
