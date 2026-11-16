@@ -1,4 +1,4 @@
-const APP_VERSION = "52";
+const APP_VERSION = "53";
 const INSTALL_HINT_KEY = "financas-install-hint-v11";
 const KEY = "minhas-financas-config";
 const SCOPE =
@@ -46,6 +46,9 @@ const state = {
   fluxoDias: [],
   ultimaConsolidacao: null,
   orcamentoOpen: false,
+  categoriaSheetOpen: false,
+  categoriaEditingRow: null,
+  categoriaForm: { nome: "", limite: "" },
   form: blankForm(),
 };
 
@@ -679,6 +682,7 @@ function parseTables(batch) {
       const nome = String(r[0] || "").trim();
       if (!nome) continue;
       rows.push({
+        sheetRow: i + 1,
         categoria: nome,
         limite: num(r[1]),
         previsto: num(r[2]),
@@ -687,11 +691,13 @@ function parseTables(batch) {
         situacao: String(r[5] || "").trim(),
       });
     }
-    return rows;
+    return { headerRow, rows };
   }
 
-  const cats = parseCategorias(byRange.Categorias || []);
-  state.categorias = cats;
+  const catParsed = parseCategorias(byRange.Categorias || []);
+  state._catMeta = { headerRow: catParsed.headerRow };
+  state.categorias = catParsed.rows;
+  const cats = catParsed.rows;
   const limitesPorCategoria = {};
   const nomes = [];
   for (const c of cats) {
@@ -1633,10 +1639,153 @@ function setupView() {
 
 function tabs() {
   return `
-    <nav class="tabs tabs-2">
+    <nav class="tabs tabs-4">
       <button class="tab ${state.tab === "painel" ? "on" : ""}" data-tab="painel">Painel</button>
       <button class="tab ${state.tab === "despesas" ? "on" : ""}" data-tab="despesas">Despesas</button>
+      <button class="tab ${state.tab === "categorias" ? "on" : ""}" data-tab="categorias">Categorias</button>
+      <button class="tab ${state.tab === "alasca" ? "on" : ""}" data-tab="alasca">Alasca</button>
     </nav>`;
+}
+
+function firstEmptyCategoriaRow() {
+  const start = (state._catMeta?.headerRow ?? 3) + 2;
+  const used = new Set(state.categorias.map((c) => c.sheetRow));
+  for (let r = start; r < start + 50; r++) {
+    if (!used.has(r)) return r;
+  }
+  return start + state.categorias.length;
+}
+
+function openCategoriaEdit(sheetRow) {
+  const c = state.categorias.find((x) => x.sheetRow === sheetRow);
+  if (!c) return;
+  state.categoriaEditingRow = sheetRow;
+  state.categoriaForm = {
+    nome: c.categoria,
+    limite: fmtMoneyInput(c.limite),
+  };
+  state.categoriaSheetOpen = true;
+  render();
+}
+
+function openNewCategoria() {
+  state.categoriaEditingRow = null;
+  state.categoriaForm = { nome: "", limite: "" };
+  state.categoriaSheetOpen = true;
+  render();
+}
+
+async function saveCategoriaSheet() {
+  const nome = String(state.categoriaForm.nome || "").trim();
+  if (!nome) {
+    showToast("Informe o nome da categoria.");
+    return;
+  }
+  const limite = num(state.categoriaForm.limite);
+  const row = state.categoriaEditingRow || firstEmptyCategoriaRow();
+  state.loading = true;
+  state.categoriaSheetOpen = false;
+  render();
+  try {
+    await api("/values:batchUpdate?valueInputOption=USER_ENTERED", {
+      method: "POST",
+      body: JSON.stringify({
+        valueInputOption: "USER_ENTERED",
+        data: [
+          { range: `Categorias!A${row}`, values: [[nome]] },
+          { range: `Categorias!B${row}`, values: [[limite]] },
+        ],
+      }),
+    });
+    showToast(state.categoriaEditingRow ? "Categoria atualizada." : "Categoria criada.");
+    state.categoriaEditingRow = null;
+    await refresh();
+  } catch (err) {
+    state.error = err.message;
+    showToast(err.message);
+    render();
+  } finally {
+    state.loading = false;
+    render();
+  }
+}
+
+function categoriasView() {
+  const rows = state.categorias
+    .slice()
+    .sort((a, b) => (b.realizado || 0) - (a.realizado || 0))
+    .map(
+      (c) => `
+      <button type="button" class="cat-item" data-cat-row="${c.sheetRow}">
+        <span>
+          <b>${esc(c.categoria)}</b>
+          <small>Orçamento ${brl(c.limite)} · pago ${brl(c.realizado)}</small>
+        </span>
+        <span class="cat-amt">${esc(c.situacao || "—")}</span>
+      </button>`
+    )
+    .join("");
+  return `
+    <div class="scroll">
+      <div class="topbar">
+        <div class="title" style="margin-top:0">Categorias</div>
+        <div class="topbar-actions">
+          <button class="linkish" id="btnReloadCat">${state.loading ? "…" : "Atualizar"}</button>
+        </div>
+      </div>
+      <p class="muted" style="font-size:12px;margin-top:6px">Toque para editar nome e orçamento mensal na planilha.</p>
+      <button type="button" class="save" id="btnNovaCategoria" style="margin-top:14px">Nova categoria</button>
+      ${rows || `<div class="empty" style="margin-top:16px">Nenhuma categoria na aba Categorias.</div>`}
+    </div>`;
+}
+
+function categoriaSheetView() {
+  if (!state.categoriaSheetOpen) return "";
+  const f = state.categoriaForm;
+  return `
+    <div class="sheet open" id="catSheet">
+      <div class="sheet-head">
+        <h2>${state.categoriaEditingRow ? "Editar categoria" : "Nova categoria"}</h2>
+        <div class="sheet-head-actions">
+          <button type="button" class="ghost" id="closeCatSheet" aria-label="Fechar">×</button>
+        </div>
+      </div>
+      <div class="sheet-body">
+        <div class="field"><label>Nome</label><input id="fCatNome" value="${esc(f.nome)}" autocomplete="off" /></div>
+        <div class="field"><label>Orçamento mensal (R$)</label><input id="fCatLimite" inputmode="decimal" value="${esc(f.limite)}" /></div>
+      </div>
+      <button class="save" id="saveCatBtn">${state.loading ? "Salvando…" : "Salvar na planilha"}</button>
+    </div>`;
+}
+
+function alascaView() {
+  const L = state.listas;
+  const chip = (list) =>
+  (list || [])
+    .map((x) => `<span class="chip">${esc(x)}</span>`)
+    .join("") || `<span class="muted" style="font-size:12px">—</span>`;
+  return `
+    <div class="scroll">
+      <div class="title">Alasca</div>
+      <p class="muted" style="font-size:12px;margin-top:6px">Mês de trabalho: <b>${esc(state.mes)} ${esc(state.ano)}</b></p>
+      <div class="alasca-block">
+        <h3>Contas</h3>
+        <div class="chip-row">${chip(L.contas)}</div>
+      </div>
+      <div class="alasca-block">
+        <h3>Formas de pagamento</h3>
+        <div class="chip-row">${chip(L.pagamentos)}</div>
+      </div>
+      <div class="alasca-block">
+        <h3>Tipos de despesa</h3>
+        <div class="chip-row">${chip(L.tipos)}</div>
+      </div>
+      <div class="alasca-block">
+        <h3>Prioridades</h3>
+        <div class="chip-row">${chip(L.prioridades)}</div>
+      </div>
+      <p class="muted" style="font-size:11px;margin-top:14px">Edite estas listas na aba <b>Listas</b> da planilha Google.</p>
+    </div>`;
 }
 
 function fluxoDailyChartHtml(rows) {
@@ -1838,7 +1987,7 @@ function painelView(m) {
       <div class="topbar">
         <div class="hello">Olá, ${esc(state.nome)} <span class="app-ver">v${APP_VERSION}</span></div>
         <div class="topbar-actions">
-          <button type="button" class="btn-orc-mini" id="btnOrcamento">categorias</button>
+          <button type="button" class="btn-orc-mini" id="btnOrcamento">Categorias</button>
           ${renderFullscreenBarBtn()}
           <button class="linkish" id="btnReload">${state.loading ? "Atualizando…" : "Atualizar"}</button>
         </div>
@@ -2110,13 +2259,12 @@ function appView() {
   const m = metrics();
   let body = "";
   if (state.tab === "painel") body = painelView(m);
-  if (state.tab === "despesas") body = despesasView();
-  if (["fluxo", "receitas", "mes"].includes(state.tab)) {
-    state.tab = "painel";
-    body = painelView(m);
-  }
+  else if (state.tab === "despesas") body = despesasView();
+  else if (state.tab === "categorias") body = categoriasView();
+  else if (state.tab === "alasca") body = alascaView();
+  else body = painelView(m);
   const orc = state.orcamentoOpen ? orcamentoOverlay(m) : "";
-  return `<div class="app ${state.loading ? "busy" : ""}">${body}${tabs()}${orc}${sheetView()}
+  return `<div class="app ${state.loading ? "busy" : ""}">${body}${tabs()}${orc}${categoriaSheetView()}${sheetView()}
     <div class="toast ${state.toast ? "show" : ""}">${esc(state.toast)}</div></div>`;
 }
 
@@ -2518,8 +2666,14 @@ function bindRootActions() {
       state.tab = tabBtn.dataset.tab;
       state.sheetOpen = false;
       state.orcamentoOpen = false;
+      state.categoriaSheetOpen = false;
       state.deleteConfirm = null;
       render();
+      return;
+    }
+    const catRowBtn = e.target.closest("[data-cat-row]");
+    if (catRowBtn) {
+      openCategoriaEdit(Number(catRowBtn.dataset.catRow));
       return;
     }
     const itemBtn = e.target.closest(".item[data-row]");
@@ -2596,9 +2750,23 @@ function bind() {
 
   on("btnReload", "click", () => refresh());
   on("btnOrcamento", "click", () => {
-    state.orcamentoOpen = true;
+    state.tab = "categorias";
+    state.orcamentoOpen = false;
     state.sheetOpen = false;
+    state.categoriaSheetOpen = false;
     render();
+  });
+  on("btnNovaCategoria", "click", openNewCategoria);
+  on("btnReloadCat", "click", () => refresh());
+  on("closeCatSheet", "click", () => {
+    state.categoriaSheetOpen = false;
+    render();
+  });
+  on("saveCatBtn", "click", () => {
+    const $ = (id) => document.getElementById(id);
+    if ($("fCatNome")) state.categoriaForm.nome = $("fCatNome").value;
+    if ($("fCatLimite")) state.categoriaForm.limite = $("fCatLimite").value;
+    saveCategoriaSheet();
   });
   on("closeOrcamento", "click", () => {
     state.orcamentoOpen = false;
