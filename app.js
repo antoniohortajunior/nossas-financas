@@ -1,4 +1,6 @@
-const APP_VERSION = "60";
+const APP_VERSION = "61";
+/** Primeira linha de lançamentos nas abas Despesas / Alasca / Gastos Viagem (cabeçalho na linha 4). */
+const DESP_DATA_START = 5;
 const VIAGENS_SHEET = "Viagens";
 const GASTOS_VIAGEM_SHEET = "Gastos Viagem";
 const PAINEL_PERIOD_KEY = "financas-painel-period-v1";
@@ -878,9 +880,12 @@ function parseTables(batch) {
         break;
       }
     }
+    if (kind === "despesa" && headerRow === 0) headerRow = 3;
     const idx = mapHeaders(values[headerRow] || []);
     const rows = [];
-    for (let i = headerRow + 1; i < values.length; i++) {
+    for (let i = 0; i < values.length; i++) {
+      if (i === headerRow) continue;
+      if (i < headerRow && !despesaRowHasData(values[i])) continue;
       const r = values[i] || [];
       const marker = String(r[0] || "");
       const joined = r.map((x) => String(x || "")).join(" ");
@@ -947,6 +952,9 @@ function parseTables(batch) {
   state.alaskaDespesas = ak.rows;
   state.gastosViagem = gv.rows;
   state.viagens = vi.rows;
+  state._gastosViagemSheetValues = gvVals || [];
+  state._despSheetValues = byRange.Despesas || [];
+  state._alaskaSheetValues = byRange.Alasca || [];
   state.receitas = [];
   state.orcamento = state.categorias.map((c) => ({
     categoria: c.categoria,
@@ -1985,13 +1993,29 @@ function openNewCategoria() {
 }
 
 function firstEmptyViagemRow() {
+  const start = DESP_DATA_START;
   const used = new Set(state.viagens.map((v) => v.sheetRow));
-  const hr = state._viagensMeta?.headerRow;
-  const start = (hr > 0 ? hr : 3) + 2;
   for (let r = start; r < start + 80; r++) {
     if (!used.has(r)) return r;
   }
   return start + state.viagens.length;
+}
+
+async function resolveNewViagemRow() {
+  const start = DESP_DATA_START;
+  const used = new Set(state.viagens.map((v) => v.sheetRow));
+  try {
+    const snap = await batchGetRanges([sheetRange(VIAGENS_SHEET, `A${start}:A${start + 79}`)]);
+    const col = snap.valueRanges?.[0]?.values || [];
+    for (let i = 0; i < col.length; i++) {
+      const nome = String(col[i]?.[0] ?? "").trim();
+      if (nome) used.add(start + i);
+    }
+  } catch (_) {}
+  for (let r = start; r < start + 80; r++) {
+    if (!used.has(r)) return r;
+  }
+  return start + used.size;
 }
 
 function openViagemEdit(sheetRow) {
@@ -2021,7 +2045,7 @@ async function saveViagemCadastro() {
     showToast("Informe o nome da viagem.");
     return;
   }
-  const row = state.viagemEditingRow || firstEmptyViagemRow();
+  const row = state.viagemEditingRow || (await resolveNewViagemRow());
   state.loading = true;
   state.viagemSheetOpen = false;
   render();
@@ -2913,14 +2937,49 @@ function openEdit(row, kind = "despesa") {
   render();
 }
 
-function firstEmptyRow(meta, rows) {
+function despesaDataStartRow(meta) {
+  const hr = meta?.headerRow > 0 ? meta.headerRow : 3;
+  return Math.max(hr + 2, DESP_DATA_START);
+}
+
+function despesaRowHasData(r) {
+  if (!r || !r.length) return false;
+  const desc = String(r[DESP_COL.descricao] ?? "").trim();
+  const cat = String(r[DESP_COL.categoria] ?? "").trim();
+  const viagem = String(r[DESP_COL.viagem] ?? r[22] ?? "").trim();
+  if (desc || cat || viagem) return true;
+  return truthy(r[DESP_COL.pago] ?? r[0]);
+}
+
+function firstEmptyRow(meta, rows, sheetValues) {
+  const start = despesaDataStartRow(meta);
   const used = new Set(rows.map((d) => d.sheetRow));
-  const hr = meta?.headerRow;
-  const start = (hr > 0 ? hr : 3) + 2;
+  if (sheetValues?.length) {
+    for (let r = start; r <= sheetValues.length; r++) {
+      if (despesaRowHasData(sheetValues[r - 1])) used.add(r);
+    }
+  }
   for (let r = start; r < start + 400; r++) {
     if (!used.has(r)) return r;
   }
   return start + rows.length;
+}
+
+/** Lê a coluna A–D na planilha e devolve a próxima linha livre (evita sobrescrever se o parse falhou). */
+async function resolveNewDespRow(sheetTitle, meta, rows) {
+  const start = despesaDataStartRow(meta);
+  const used = new Set(rows.map((d) => d.sheetRow));
+  try {
+    const snap = await batchGetRanges([sheetRange(sheetTitle, `A${start}:D${start + 399}`)]);
+    const block = snap.valueRanges?.[0]?.values || [];
+    for (let i = 0; i < block.length; i++) {
+      if (despesaRowHasData(block[i])) used.add(start + i);
+    }
+  } catch (_) {}
+  for (let r = start; r < start + 400; r++) {
+    if (!used.has(r)) return r;
+  }
+  return start + used.size;
 }
 
 async function saveSheet() {
@@ -3007,7 +3066,16 @@ async function saveSheet() {
       : isAlaska
         ? state.alaskaDespesas
         : state.despesas;
-  const row = state.editingRow || firstEmptyRow(meta, rows);
+  const sheetValues = isGastoViagem
+    ? state._gastosViagemSheetValues
+    : isAlaska
+      ? state._alaskaSheetValues
+      : state._despSheetValues;
+  const row =
+    state.editingRow ||
+    (isRec
+      ? firstEmptyRow(meta, rows, sheetValues)
+      : await resolveNewDespRow(sheet, meta, rows));
   const competencia =
     isGastoViagem && f.vencimento?.length >= 7
       ? `${f.vencimento.slice(0, 7)}-01`
