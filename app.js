@@ -1,4 +1,4 @@
-const APP_VERSION = "59";
+const APP_VERSION = "60";
 const VIAGENS_SHEET = "Viagens";
 const GASTOS_VIAGEM_SHEET = "Gastos Viagem";
 const PAINEL_PERIOD_KEY = "financas-painel-period-v1";
@@ -328,6 +328,11 @@ function colLetter(i) {
 function sheetRange(sheetTitle, a1) {
   const name = String(sheetTitle || "").replace(/'/g, "''");
   return `'${name}'!${a1}`;
+}
+
+function sheetKeyFromRange(rangeStr) {
+  const part = String(rangeStr || "").split("!")[0] || "";
+  return part.replace(/^'+|'+$/g, "").trim();
 }
 
 const DESP_COL = {
@@ -737,6 +742,7 @@ function hydrateOrcamentoMeta() {
 }
 
 function parseViagensTable(values) {
+  if (!values || !values.length) return { headerRow: 3, rows: [] };
   let headerRow = 0;
   for (let i = 0; i < Math.min(values.length, 12); i++) {
     const joined = (values[i] || []).map((x) => String(x || "")).join(" ").toLowerCase();
@@ -759,6 +765,7 @@ function parseViagensTable(values) {
       realizado: num(r[4]),
     });
   }
+  if (headerRow === 0) headerRow = 3;
   return { headerRow, rows };
 }
 
@@ -769,7 +776,7 @@ function viagensNomes() {
 function parseTables(batch) {
   const byRange = {};
   (batch.valueRanges || []).forEach((vr) => {
-    byRange[vr.range.split("!")[0].replace(/'/g, "")] = vr.values || [];
+    byRange[sheetKeyFromRange(vr.range)] = vr.values || [];
   });
 
   const cfg = byRange.Config || [];
@@ -920,13 +927,21 @@ function parseTables(batch) {
 
   const d = parseSheet(byRange.Despesas || [], "despesa");
   const ak = parseSheet(byRange.Alasca || [], "despesa");
-  const gv = parseSheet(byRange[GASTOS_VIAGEM_SHEET] || [], "despesa");
-  const vi = parseViagensTable(byRange[VIAGENS_SHEET] || []);
+  const gvVals = byRange[GASTOS_VIAGEM_SHEET];
+  const gv = parseSheet(gvVals || [], "despesa");
+  const viVals = byRange[VIAGENS_SHEET];
+  const vi = parseViagensTable(viVals || []);
   state._despMeta = d;
   state._alaskaMeta = byRange.Alasca && byRange.Alasca.length ? ak : null;
   state._gastosViagemMeta =
-    byRange[GASTOS_VIAGEM_SHEET] && byRange[GASTOS_VIAGEM_SHEET].length ? gv : null;
-  state._viagensMeta = byRange[VIAGENS_SHEET] && byRange[VIAGENS_SHEET].length ? vi : null;
+    gvVals != null
+      ? gv
+      : {
+          headerRow: d.headerRow,
+          idx: { ...d.idx, viagem: d.idx?.viagem ?? DESP_COL.viagem },
+          rows: [],
+        };
+  state._viagensMeta = viVals != null ? vi : vi;
   state._recMeta = null;
   state.despesas = d.rows;
   state.alaskaDespesas = ak.rows;
@@ -1038,12 +1053,7 @@ async function refresh() {
         sheetRange(GASTOS_VIAGEM_SHEET, "A1:W400"),
       ]);
       data.valueRanges = data.valueRanges.concat(viagemBatch.valueRanges);
-    } catch (_) {
-      state._viagensMeta = null;
-      state._gastosViagemMeta = null;
-      state.viagens = [];
-      state.gastosViagem = [];
-    }
+    } catch (_) {}
     parseTables(data);
     syncPainelPeriodDefaults();
     state.fluxoDias = [];
@@ -1077,8 +1087,25 @@ function monthAlaska() {
   return state.alaskaDespesas.filter((d) => inWorkMonth(d));
 }
 
+/** Gastos de viagem costumam cair fora do “mês de trabalho” da planilha — lista tudo e filtra só na busca/filtros. */
 function monthGastosViagem() {
-  return state.gastosViagem.filter((d) => inWorkMonth(d));
+  return state.gastosViagem;
+}
+
+function viagemTripOverlapsPainel(viagemNome) {
+  const { start, end } = painelPeriodBounds();
+  if (!start || !end || !viagemNome) return false;
+  const trip = state.viagens.find((v) => String(v.nome || "").trim() === String(viagemNome).trim());
+  if (!trip) return false;
+  const ti = trip.inicio?.slice(0, 10);
+  const tf = trip.fim?.slice(0, 10);
+  if (ti && tf) return tf >= start && ti <= end;
+  return false;
+}
+
+function gastoViagemInPainelPeriod(d) {
+  if (expenseInPainelPeriod(d)) return true;
+  return viagemTripOverlapsPainel(d.viagem);
 }
 
 function expenseRows(kind) {
@@ -1143,7 +1170,8 @@ function expenseInPainelPeriod(d) {
 }
 
 function despesasInPainelPeriod(kind = state.painelFonte) {
-  let list = expenseRows(kind).filter(expenseInPainelPeriod);
+  const inPeriod = kind === "viagem" ? gastoViagemInPainelPeriod : expenseInPainelPeriod;
+  let list = expenseRows(kind).filter(inPeriod);
   if (kind === "viagem" && state.painelViagem) {
     const v = state.painelViagem;
     list = list.filter((d) => String(d.viagem || "").trim() === v);
@@ -1958,7 +1986,8 @@ function openNewCategoria() {
 
 function firstEmptyViagemRow() {
   const used = new Set(state.viagens.map((v) => v.sheetRow));
-  const start = (state._viagensMeta?.headerRow ?? 3) + 2;
+  const hr = state._viagensMeta?.headerRow;
+  const start = (hr > 0 ? hr : 3) + 2;
   for (let r = start; r < start + 80; r++) {
     if (!used.has(r)) return r;
   }
@@ -2136,7 +2165,7 @@ function gastosViagemView() {
     title: "Gastos na viagem",
     fabId: "fabGastoViagem",
     scrollId: "gastosViagemScroll",
-    emptyMsg: "Nenhum gasto de viagem neste mês. Cadastre uma viagem e toque no +.",
+    emptyMsg: "Nenhum gasto de viagem. Cadastre uma viagem em Minhas Viagens e toque no +.",
   });
 }
 
@@ -2886,7 +2915,8 @@ function openEdit(row, kind = "despesa") {
 
 function firstEmptyRow(meta, rows) {
   const used = new Set(rows.map((d) => d.sheetRow));
-  const start = (meta?.headerRow ?? 4) + 2;
+  const hr = meta?.headerRow;
+  const start = (hr > 0 ? hr : 3) + 2;
   for (let r = start; r < start + 400; r++) {
     if (!used.has(r)) return r;
   }
@@ -2978,7 +3008,10 @@ async function saveSheet() {
         ? state.alaskaDespesas
         : state.despesas;
   const row = state.editingRow || firstEmptyRow(meta, rows);
-  const competencia = `${state.ano}-${String(state.mesNum).padStart(2, "0")}-01`;
+  const competencia =
+    isGastoViagem && f.vencimento?.length >= 7
+      ? `${f.vencimento.slice(0, 7)}-01`
+      : `${state.ano}-${String(state.mesNum).padStart(2, "0")}-01`;
   const previsto = num(f.previsto);
   const realizado = f.pago ? num(f.realizado || f.previsto) : num(f.realizado);
   const writes = isRec
@@ -3027,6 +3060,10 @@ async function saveSheet() {
       values: [[value]],
     });
   }
+  if (!isRec && data.length === 0) {
+    showToast("Não foi possível montar a gravação na planilha. Toque Atualizar e tente de novo.");
+    return;
+  }
   state.loading = true;
   render();
   try {
@@ -3043,6 +3080,10 @@ async function saveSheet() {
     if (/unable to parse range/i.test(msg) && isAlaska) {
       msg =
         "Não foi possível gravar na aba Alasca. Confira se ela existe na planilha (Finanças → Criar aba Alasca) e toque Atualizar no app.";
+    }
+    if (/unable to parse range/i.test(msg) && isGastoViagem) {
+      msg =
+        "Não foi possível gravar em Gastos Viagem. Na planilha: Finanças → Criar abas Viagens + Gastos Viagem, depois Atualizar no app.";
     }
     state.error = msg;
     showToast(msg);
