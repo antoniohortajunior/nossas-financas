@@ -1,4 +1,4 @@
-const APP_VERSION = "61";
+const APP_VERSION = "62";
 /** Primeira linha de lançamentos nas abas Despesas / Alasca / Gastos Viagem (cabeçalho na linha 4). */
 const DESP_DATA_START = 5;
 const VIAGENS_SHEET = "Viagens";
@@ -393,6 +393,71 @@ function despColIdx(idx, field) {
   if (field === "viagem") return idx?.viagem != null ? idx.viagem : DESP_COL.viagem;
   if (idx?.[field] != null) return idx[field];
   return DESP_COL[field] ?? null;
+}
+
+function defaultDespIdx() {
+  const idx = { ...DESP_COL };
+  idx.viagem = DESP_COL.viagem;
+  return idx;
+}
+
+/** Leitura de Gastos Viagem com intervalo A5:W (sem depender do cabeçalho na linha 4). */
+function parseGastosViagemFixed(values) {
+  const idx = defaultDespIdx();
+  const rows = [];
+  for (let i = 0; i < (values || []).length; i++) {
+    const r = values[i] || [];
+    if (!despesaRowHasData(r)) continue;
+    const compRaw = r[idx.competencia] ?? r[1] ?? "";
+    rows.push({
+      sheetRow: DESP_DATA_START + i,
+      pago: truthy(r[idx.pago] ?? r[0]),
+      competenciaRaw: compRaw,
+      competencia: serialToISO(compRaw),
+      categoria: String(r[idx.categoria] ?? r[2] ?? ""),
+      descricao: String(r[idx.descricao] ?? r[3] ?? ""),
+      tipo: String(r[idx.tipo] ?? r[4] ?? ""),
+      vencimento: serialToISO(r[idx.vencimento] ?? r[5]),
+      prioridade: String(r[idx.prioridade] ?? r[7] ?? ""),
+      status: cleanSheetStatus(r[idx.status] ?? r[8]),
+      previsto: num(r[idx.previsto] ?? r[10]),
+      realizado: num(r[idx.realizado] ?? r[11]),
+      pct: num(r[idx.pct]),
+      situacao: String(r[idx.situacao] ?? ""),
+      dataPagamento: serialToISO(r[idx.dataPagamento] ?? r[6]),
+      dataRecebimento: "",
+      tipoPgto: String(r[idx.tipoPgto] ?? r[16] ?? ""),
+      dtLancamento: String(r[idx.dtLancamento] ?? r[21] ?? ""),
+      viagem: String(r[idx.viagem] ?? r[22] ?? "").trim(),
+      conta: String(r[idx.conta] ?? r[17] ?? ""),
+      recorrente: String(r[idx.recorrente] ?? r[18] ?? "Não"),
+      parcela: String(r[idx.parcela] ?? ""),
+      observacoes: String(r[idx.observacoes] ?? r[20] ?? ""),
+      classe: "",
+      limite: 0,
+      restante: 0,
+      idx,
+    });
+  }
+  return { headerRow: 3, idx, rows };
+}
+
+function parseViagensDataOnly(values) {
+  const rows = [];
+  for (let i = 0; i < (values || []).length; i++) {
+    const r = values[i] || [];
+    const nome = String(r[0] || "").trim();
+    if (!nome) continue;
+    rows.push({
+      sheetRow: DESP_DATA_START + i,
+      nome,
+      inicio: serialToISO(r[1]),
+      fim: serialToISO(r[2]),
+      previsto: num(r[3]),
+      realizado: num(r[4]),
+    });
+  }
+  return { headerRow: 3, rows };
 }
 
 function mapHeaders(row) {
@@ -933,9 +998,9 @@ function parseTables(batch) {
   const d = parseSheet(byRange.Despesas || [], "despesa");
   const ak = parseSheet(byRange.Alasca || [], "despesa");
   const gvVals = byRange[GASTOS_VIAGEM_SHEET];
-  const gv = parseSheet(gvVals || [], "despesa");
+  const gv = parseGastosViagemFixed(gvVals || []);
   const viVals = byRange[VIAGENS_SHEET];
-  const vi = parseViagensTable(viVals || []);
+  const vi = parseViagensDataOnly(viVals || []);
   state._despMeta = d;
   state._alaskaMeta = byRange.Alasca && byRange.Alasca.length ? ak : null;
   state._gastosViagemMeta =
@@ -1057,11 +1122,14 @@ async function refresh() {
     } catch (_) {}
     try {
       const viagemBatch = await batchGetRanges([
-        sheetRange(VIAGENS_SHEET, "A1:E120"),
-        sheetRange(GASTOS_VIAGEM_SHEET, "A1:W400"),
+        sheetRange(VIAGENS_SHEET, `A${DESP_DATA_START}:E120`),
+        sheetRange(GASTOS_VIAGEM_SHEET, `A${DESP_DATA_START}:W500`),
       ]);
       data.valueRanges = data.valueRanges.concat(viagemBatch.valueRanges);
-    } catch (_) {}
+    } catch (e) {
+      state.hint =
+        "Não foi possível ler Viagens / Gastos Viagem. Confira se as abas existem (Finanças → Criar abas Viagens + Gastos Viagem).";
+    }
     parseTables(data);
     syncPainelPeriodDefaults();
     state.fluxoDias = [];
@@ -2970,7 +3038,7 @@ async function resolveNewDespRow(sheetTitle, meta, rows) {
   const start = despesaDataStartRow(meta);
   const used = new Set(rows.map((d) => d.sheetRow));
   try {
-    const snap = await batchGetRanges([sheetRange(sheetTitle, `A${start}:D${start + 399}`)]);
+    const snap = await batchGetRanges([sheetRange(sheetTitle, `A${start}:W${start + 399}`)]);
     const block = snap.valueRanges?.[0]?.values || [];
     for (let i = 0; i < block.length; i++) {
       if (despesaRowHasData(block[i])) used.add(start + i);
@@ -2980,6 +3048,41 @@ async function resolveNewDespRow(sheetTitle, meta, rows) {
     if (!used.has(r)) return r;
   }
   return start + used.size;
+}
+
+function buildDespRowLine(idx, writes, includeViagem) {
+  const width = 23;
+  const line = new Array(width).fill("");
+  for (const [field, value] of Object.entries(writes)) {
+    if (field === "viagem" && !includeViagem) continue;
+    const col = despColIdx(idx, field);
+    if (col == null || col < 0 || col >= width) continue;
+    line[col] = value === false || value === true ? value : value ?? "";
+  }
+  return line;
+}
+
+async function appendDespesaRow(sheetTitle, idx, writes, includeViagem) {
+  const line = buildDespRowLine(idx, writes, includeViagem);
+  const range = sheetRange(sheetTitle, `A${DESP_DATA_START}:W`);
+  return api(
+    `/values/${encodeURIComponent(range)}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
+    {
+      method: "POST",
+      body: JSON.stringify({ values: [line] }),
+    }
+  );
+}
+
+async function reloadGastosViagemFromSheet() {
+  try {
+    const snap = await batchGetRanges([sheetRange(GASTOS_VIAGEM_SHEET, `A${DESP_DATA_START}:W500`)]);
+    const vals = snap.valueRanges?.[0]?.values || [];
+    const gv = parseGastosViagemFixed(vals);
+    state.gastosViagem = gv.rows;
+    state._gastosViagemMeta = gv;
+    state._gastosViagemSheetValues = vals;
+  } catch (_) {}
 }
 
 async function saveSheet() {
@@ -3036,13 +3139,14 @@ async function saveSheet() {
       }
     }
   }
-  const idx = (isRec
-    ? state._recMeta
+  const baseIdx = { ...defaultDespIdx(), ...(state._despMeta?.idx || {}) };
+  const idx = isRec
+    ? (state._recMeta?.idx || {})
     : isGastoViagem
-      ? state._gastosViagemMeta
+      ? { ...baseIdx, ...(state._gastosViagemMeta?.idx || {}), viagem: DESP_COL.viagem }
       : isAlaska
-        ? state._alaskaMeta
-        : state._despMeta)?.idx || {};
+        ? { ...baseIdx, ...(state._alaskaMeta?.idx || {}) }
+        : { ...baseIdx, ...(state._despMeta?.idx || {}) };
   const sheet = sheetTitleForKind(
     isGastoViagem ? "gastoviagem" : isAlaska ? "alasca" : isRec ? "receita" : "despesa"
   );
@@ -3135,13 +3239,24 @@ async function saveSheet() {
   state.loading = true;
   render();
   try {
-    await api("/values:batchUpdate?valueInputOption=USER_ENTERED", {
-      method: "POST",
-      body: JSON.stringify({ valueInputOption: "USER_ENTERED", data }),
-    });
+    const appendNewGastoViagem = isGastoViagem && !state.editingRow;
+    if (appendNewGastoViagem) {
+      await appendDespesaRow(sheet, idx, writes, true);
+    } else {
+      await api("/values:batchUpdate?valueInputOption=USER_ENTERED", {
+        method: "POST",
+        body: JSON.stringify({ valueInputOption: "USER_ENTERED", data }),
+      });
+    }
     state.sheetOpen = false;
     showToast("Salvo. Status e % calculam na planilha.");
-    await refresh();
+    if (appendNewGastoViagem) {
+      await reloadGastosViagemFromSheet();
+      state.loading = false;
+      render();
+    } else {
+      await refresh();
+    }
   } catch (err) {
     state.loading = false;
     let msg = err.message || String(err);
