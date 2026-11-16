@@ -1,13 +1,16 @@
-const APP_VERSION = "55";
+const APP_VERSION = "57";
 const PAINEL_PERIOD_KEY = "financas-painel-period-v1";
 const INSTALL_HINT_KEY = "financas-install-hint-v11";
 const KEY = "minhas-financas-config";
 const SCOPE =
   "https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/userinfo.profile";
+/** Planilha padrão se planilha.json não existir ou estiver offline. */
 const DEFAULTS = {
   spreadsheetUrl: "https://docs.google.com/spreadsheets/d/1jSJaWTpsmrjskUPhQS1fvQxVbs7dpI05NMzT7-IkS-o/edit",
   clientId: "1012119713797-8tig992brdgokg5uovs3oendceb9e5oj.apps.googleusercontent.com",
 };
+/** Reserva quando planilha.json não traz revisão. */
+const PLANILHA_REV_FALLBACK = 1;
 const MONTHS = [
   "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
   "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
@@ -312,6 +315,12 @@ function colLetter(i) {
   return s;
 }
 
+/** Notação A1 para a API (nome da aba entre aspas simples). */
+function sheetRange(sheetTitle, a1) {
+  const name = String(sheetTitle || "").replace(/'/g, "''");
+  return `'${name}'!${a1}`;
+}
+
 const DESP_COL = {
   pago: 0,
   competencia: 1,
@@ -520,17 +529,62 @@ async function fetchGoogleProfile() {
   } catch (_) {}
 }
 
+/**
+ * Lê app/planilha.json no servidor. Se planilhaRev for maior que a salva no aparelho,
+ * todos os usuários passam a usar o novo spreadsheetUrl na próxima abertura do app.
+ */
+async function syncPlanilhaFromPublisher() {
+  let rev = PLANILHA_REV_FALLBACK;
+  let url = DEFAULTS.spreadsheetUrl;
+  let label = "";
+  try {
+    const res = await fetch(`./planilha.json?v=${APP_VERSION}`, { cache: "no-store" });
+    if (res.ok) {
+      const j = await res.json();
+      if (j.spreadsheetUrl) url = String(j.spreadsheetUrl).trim();
+      if (j.planilhaRev != null) rev = Number(j.planilhaRev) || rev;
+      if (j.nome) label = String(j.nome).trim();
+    }
+  } catch (_) {}
+  const cfg = loadConfig();
+  if ((cfg.planilhaRev || 0) >= rev) {
+    state.planilhaLabel = cfg.planilhaLabel || label;
+    return;
+  }
+  const id = extractSpreadsheetId(url);
+  if (!id) return;
+  saveConfig({
+    planilhaRev: rev,
+    spreadsheetUrl: url,
+    spreadsheetId: id,
+    planilhaLabel: label,
+  });
+  state._planilhaMigrated = true;
+  state.planilhaLabel = label;
+}
+
 function applyStoredConfig() {
   const cfg = loadConfig();
   state.clientId = normalizeClientId(cfg.clientId || DEFAULTS.clientId);
   state.spreadsheetId = cfg.spreadsheetId || extractSpreadsheetId(DEFAULTS.spreadsheetUrl);
   const spreadsheetUrl = cfg.spreadsheetUrl || DEFAULTS.spreadsheetUrl;
+  state.planilhaLabel = cfg.planilhaLabel || state.planilhaLabel || "";
   saveConfig({
     clientId: state.clientId,
     spreadsheetId: state.spreadsheetId,
     spreadsheetUrl,
+    planilhaRev: cfg.planilhaRev,
+    planilhaLabel: state.planilhaLabel,
   });
   if (cfg.googleName) state.nome = cfg.googleName;
+}
+
+function planilhaRefHint() {
+  const id = state.spreadsheetId || "";
+  if (!id) return "";
+  const tail = id.slice(-6);
+  const name = state.planilhaLabel ? esc(state.planilhaLabel) : `···${esc(tail)}`;
+  return `<p class="planilha-ref muted">Planilha: ${name}</p>`;
 }
 
 function pillClass(status) {
@@ -924,7 +978,7 @@ async function refresh() {
       "Listas!G4:N20",
     ]);
     try {
-      const alaska = await batchGetRanges(["Alasca!A1:U400"]);
+      const alaska = await batchGetRanges([sheetRange("Alasca", "A1:U400")]);
       data.valueRanges = data.valueRanges.concat(alaska.valueRanges);
     } catch (_) {}
     parseTables(data);
@@ -1809,9 +1863,9 @@ async function saveCategoriaSheet() {
       body: JSON.stringify({
         valueInputOption: "USER_ENTERED",
         data: [
-          { range: `Categorias!A${row}`, values: [[nome]] },
-          { range: `Categorias!B${row}`, values: [[limite]] },
-          { range: `Categorias!G${row}`, values: [[vinculo]] },
+          { range: sheetRange("Categorias", `A${row}`), values: [[nome]] },
+          { range: sheetRange("Categorias", `B${row}`), values: [[limite]] },
+          { range: sheetRange("Categorias", `G${row}`), values: [[vinculo]] },
         ],
       }),
     });
@@ -2143,6 +2197,7 @@ function painelView(m) {
         <button type="button" class="chip ${state.painelFonte === "alasca" ? "on" : ""}" data-painel-fonte="alasca">Alasca</button>
       </div>
       <p class="muted painel-period-hint">Painel: <b>${esc(fonteLbl)}</b> · período selecionado</p>
+      ${planilhaRefHint()}
       <div class="grid2">
         <div class="kpi"><span>PREVISTO</span><b>${brl(m.previsto)}</b><small class="kpi-hint">no período</small></div>
         <div class="kpi"><span>REALIZADO</span><b style="color:var(--rose)">${brl(m.realizado)}</b><small class="kpi-hint">só pagas</small></div>
@@ -2535,6 +2590,14 @@ async function saveSheet() {
   const f = state.form;
   const isRec = state.sheetKind === "receita";
   const isAlaska = state.sheetKind === "alasca";
+  if (isAlaska) {
+    try {
+      await getAlaskaSheetId();
+    } catch {
+      showToast("Aba Alasca não existe. Na planilha: Finanças → Configurar → Criar aba Alasca.");
+      return;
+    }
+  }
   const label = isRec ? "fonte ou descrição" : "descrição";
   if (!f.descricao.trim() && !(isRec && f.fonte)) {
     showToast(`Preencha a ${label}.`);
@@ -2565,7 +2628,14 @@ async function saveSheet() {
   }
   const idx = (isRec ? state._recMeta : isAlaska ? state._alaskaMeta : state._despMeta)?.idx || {};
   const sheet = sheetTitleForKind(isAlaska ? "alasca" : isRec ? "receita" : "despesa");
-  const meta = isRec ? state._recMeta : isAlaska ? state._alaskaMeta : state._despMeta;
+  const meta = isRec
+    ? state._recMeta
+    : isAlaska
+      ? state._alaskaMeta || {
+          headerRow: state._despMeta?.headerRow ?? 3,
+          idx: state._despMeta?.idx || {},
+        }
+      : state._despMeta;
   const rows = isRec ? state.receitas : isAlaska ? state.alaskaDespesas : state.despesas;
   const row = state.editingRow || firstEmptyRow(meta, rows);
   const competencia = `${state.ano}-${String(state.mesNum).padStart(2, "0")}-01`;
@@ -2611,7 +2681,7 @@ async function saveSheet() {
     const col = isRec ? idx[field] : despColIdx(idx, field);
     if (col == null) continue;
     data.push({
-      range: `${sheet}!${colLetter(col)}${row}`,
+      range: sheetRange(sheet, `${colLetter(col)}${row}`),
       values: [[value]],
     });
   }
@@ -2627,8 +2697,13 @@ async function saveSheet() {
     await refresh();
   } catch (err) {
     state.loading = false;
-    state.error = err.message;
-    showToast(err.message);
+    let msg = err.message || String(err);
+    if (/unable to parse range/i.test(msg) && isAlaska) {
+      msg =
+        "Não foi possível gravar na aba Alasca. Confira se ela existe na planilha (Finanças → Criar aba Alasca) e toque Atualizar no app.";
+    }
+    state.error = msg;
+    showToast(msg);
     render();
   }
 }
@@ -2668,25 +2743,31 @@ async function togglePago(row, ev, kind = "despesa") {
   }
   const pagoCol =
     kind === "receita" ? d.idx.pago : despColIdx(d.idx, "pago");
-  const data = [{ range: `${sheet}!${colLetter(pagoCol)}${row}`, values: [[next]] }];
+  const data = [{ range: sheetRange(sheet, `${colLetter(pagoCol)}${row}`), values: [[next]] }];
   if (next && !d.realizado && d.previsto) {
     const realCol =
       kind === "receita" ? d.idx.realizado : despColIdx(d.idx, "realizado");
-    data.push({ range: `${sheet}!${colLetter(realCol)}${row}`, values: [[d.previsto]] });
+    data.push({ range: sheetRange(sheet, `${colLetter(realCol)}${row}`), values: [[d.previsto]] });
   }
   if (kind === "despesa" || kind === "alasca") {
     const pgtoCol = despColIdx(d.idx, "dataPagamento");
     if (next) {
       const pgto = despesaDataPagamento(d);
       if (pgto) {
-        data.push({ range: `${sheet}!${colLetter(pgtoCol)}${row}`, values: [[isoToBR(pgto)]] });
+        data.push({
+          range: sheetRange(sheet, `${colLetter(pgtoCol)}${row}`),
+          values: [[isoToBR(pgto)]],
+        });
       }
     } else {
-      data.push({ range: `${sheet}!${colLetter(pgtoCol)}${row}`, values: [[""]] });
+      data.push({ range: sheetRange(sheet, `${colLetter(pgtoCol)}${row}`), values: [[""]] });
     }
   }
   if (kind === "receita" && !next && d.idx.dataRecebimento != null) {
-    data.push({ range: `${sheet}!${colLetter(d.idx.dataRecebimento)}${row}`, values: [[""]] });
+    data.push({
+      range: sheetRange(sheet, `${colLetter(d.idx.dataRecebimento)}${row}`),
+      values: [[""]],
+    });
   }
   try {
     await api("/values:batchUpdate?valueInputOption=USER_ENTERED", {
@@ -3002,7 +3083,12 @@ function bind() {
 }
 
 async function boot() {
+  await syncPlanilhaFromPublisher();
   applyStoredConfig();
+  if (state._planilhaMigrated) {
+    showToast("App atualizado para a planilha definida em planilha.json.");
+    state._planilhaMigrated = false;
+  }
   render();
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker

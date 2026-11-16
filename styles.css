@@ -191,6 +191,7 @@ body {
 }
 .painel-fonte { margin-top: 10px; }
 .painel-period-hint { font-size: 11px; margin-top: 8px; margin-bottom: 4px; }
+.planilha-ref { font-size: 10px; margin: 0 0 8px; opacity: 0.85; }
 .flux-hero .sub { font-size: 11px; margin-top: 6px; opacity: 0.9; }
 .flux-row {
   display: block;
