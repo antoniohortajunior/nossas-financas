@@ -1,4 +1,4 @@
-const APP_VERSION = "64";
+const APP_VERSION = "65";
 /** Primeira linha de lançamentos nas abas Despesas / Alasca / Gastos Viagem (cabeçalho na linha 4). */
 const DESP_DATA_START = 5;
 const VIAGENS_SHEET = "Viagens";
@@ -2017,7 +2017,6 @@ function setupView() {
 }
 
 function bottomDock() {
-  const travelOn = state.tab === "viagens" || state.tab === "gastosviagem";
   return `
     <footer class="bottom-dock" role="navigation" aria-label="Menu principal">
       <nav class="dock-main tabs-4">
@@ -2034,12 +2033,9 @@ function bottomDock() {
           <span class="dock-ico" aria-hidden="true">⌂</span><span class="dock-lbl">Alasca</span>
         </button>
       </nav>
-      <div class="dock-travel ${travelOn ? "dock-travel--active" : ""}">
-        <span class="dock-travel-title">Viagens</span>
-        <div class="dock-travel-btns">
-          <button type="button" class="travel-btn ${state.tab === "viagens" ? "on" : ""}" data-tab="viagens">Cadastro</button>
-          <button type="button" class="travel-btn ${state.tab === "gastosviagem" ? "on" : ""}" data-tab="gastosviagem">Gastos</button>
-        </div>
+      <div class="dock-travel">
+        <button type="button" class="travel-btn ${state.tab === "viagens" ? "on" : ""}" data-tab="viagens">Nossas viagens</button>
+        <button type="button" class="travel-btn ${state.tab === "gastosviagem" ? "on" : ""}" data-tab="gastosviagem">Gastos na viagem</button>
       </div>
     </footer>`;
 }

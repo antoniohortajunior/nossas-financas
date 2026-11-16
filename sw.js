@@ -1,4 +1,4 @@
-const CACHE = "minhas-financas-v64";
+const CACHE = "minhas-financas-v65";
 
 self.addEventListener("install", (e) => {
   self.skipWaiting();

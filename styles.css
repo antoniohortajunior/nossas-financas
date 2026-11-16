@@ -223,42 +223,25 @@ body {
 .painel-period-hint { font-size: 11px; margin-top: 8px; margin-bottom: 4px; }
 .planilha-ref { font-size: 10px; margin: 0 0 8px; opacity: 0.85; }
 .dock-travel {
-  display: flex;
-  align-items: center;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 8px;
   margin-top: 8px;
   padding-top: 8px;
   border-top: 1px solid #eef2f6;
 }
-.dock-travel-title {
-  flex-shrink: 0;
-  font-size: 9px;
-  font-weight: 800;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--violet);
-  width: 52px;
-  text-align: center;
-  line-height: 1.2;
-}
-.dock-travel-btns {
-  flex: 1;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
-}
-.dock-travel--active .dock-travel-title { color: #5b21b6; }
 .travel-btn {
-  border: 1px solid #e2e8f0;
-  background: #f8fafc;
-  border-radius: 12px;
-  padding: 9px 6px;
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 14px;
+  padding: 10px 8px;
   font-family: inherit;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 650;
   color: var(--muted);
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
+  line-height: 1.2;
 }
 .travel-btn.on {
   background: #ede9fe;
