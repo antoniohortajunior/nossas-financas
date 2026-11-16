@@ -1,4 +1,5 @@
-const APP_VERSION = "53";
+const APP_VERSION = "54";
+const PAINEL_PERIOD_KEY = "financas-painel-period-v1";
 const INSTALL_HINT_KEY = "financas-install-hint-v11";
 const KEY = "minhas-financas-config";
 const SCOPE =
@@ -26,8 +27,12 @@ const state = {
   mesStart: "",
   mesEnd: "",
   despesas: [],
+  alaskaDespesas: [],
   receitas: [],
   categorias: [],
+  painelDe: "",
+  painelAte: "",
+  painelFonte: "despesas",
   orcamento: [],
   listas: { categorias: [], tipos: [], prioridades: [], pagamentos: [], contas: [] },
   query: "",
@@ -791,9 +796,12 @@ function parseTables(batch) {
   }
 
   const d = parseSheet(byRange.Despesas || [], "despesa");
+  const ak = parseSheet(byRange.Alasca || [], "despesa");
   state._despMeta = d;
+  state._alaskaMeta = byRange.Alasca && byRange.Alasca.length ? ak : null;
   state._recMeta = null;
   state.despesas = d.rows;
+  state.alaskaDespesas = ak.rows;
   state.receitas = [];
   state.orcamento = state.categorias.map((c) => ({
     categoria: c.categoria,
@@ -890,12 +898,23 @@ async function refresh() {
       "Categorias!A1:F60",
       "Listas!G4:N20",
     ]);
+    try {
+      const alaska = await batchGetRanges(["Alasca!A1:U400"]);
+      data.valueRanges = data.valueRanges.concat(alaska.valueRanges);
+    } catch (_) {}
     parseTables(data);
+    syncPainelPeriodDefaults();
     state.fluxoDias = [];
     state.fluxoFromSheet = false;
     state.ultimaConsolidacao = null;
     const monthCount = monthDespesas().length;
-    if (!state.despesas.length) {
+    if (
+      (state.tab === "alasca" || state.painelFonte === "alasca") &&
+      !state._alaskaMeta
+    ) {
+      state.hint =
+        "Crie a aba Alasca na planilha (Finanças → Configurar → Criar aba Alasca) ou importe o modelo novo.";
+    } else if (!state.despesas.length) {
       state.hint = "Nenhuma linha na aba Despesas. A planilha precisa das abas Config, Despesas, Categorias e Listas.";
     } else if (!monthCount) {
       state.hint = `${state.despesas.length} linha(s) na planilha, ${monthCount} no mês ${state.mes}/${state.ano}. Confira Config (B5/B6) e Competência ou Vencimento.`;
@@ -910,6 +929,66 @@ async function refresh() {
 
 function monthDespesas() {
   return state.despesas.filter((d) => inWorkMonth(d));
+}
+
+function monthAlaska() {
+  return state.alaskaDespesas.filter((d) => inWorkMonth(d));
+}
+
+function expenseRows(kind) {
+  return kind === "alasca" ? state.alaskaDespesas : state.despesas;
+}
+
+function sheetTitleForKind(kind) {
+  if (kind === "alasca") return "Alasca";
+  if (kind === "receita") return "Receitas";
+  return "Despesas";
+}
+
+function loadPainelPeriodFromStore() {
+  try {
+    const raw = localStorage.getItem(PAINEL_PERIOD_KEY);
+    if (!raw) return;
+    const o = JSON.parse(raw);
+    if (o.painelDe) state.painelDe = o.painelDe;
+    if (o.painelAte) state.painelAte = o.painelAte;
+    if (o.painelFonte === "alasca" || o.painelFonte === "despesas") state.painelFonte = o.painelFonte;
+  } catch (_) {}
+}
+
+function savePainelPeriodToStore() {
+  localStorage.setItem(
+    PAINEL_PERIOD_KEY,
+    JSON.stringify({ painelDe: state.painelDe, painelAte: state.painelAte, painelFonte: state.painelFonte })
+  );
+}
+
+function syncPainelPeriodDefaults() {
+  loadPainelPeriodFromStore();
+  if (!state.painelDe && state.mesStart) state.painelDe = state.mesStart.slice(0, 10);
+  if (!state.painelAte && state.mesEnd) state.painelAte = state.mesEnd.slice(0, 10);
+}
+
+function painelPeriodBounds() {
+  const start = state.painelDe || state.mesStart?.slice(0, 10) || "";
+  const end = state.painelAte || state.mesEnd?.slice(0, 10) || "";
+  return { start, end };
+}
+
+function expenseInPainelPeriod(d) {
+  const { start, end } = painelPeriodBounds();
+  if (!start || !end) return inWorkMonth(d);
+  const comp = d.competencia?.slice(0, 10);
+  const venc = d.vencimento?.slice(0, 10);
+  const pgto = d.dataPagamento?.slice(0, 10);
+  if (comp && comp >= start && comp <= end) return true;
+  if (pgto && pgto >= start && pgto <= end) return true;
+  if (venc && venc >= start && venc <= end) return true;
+  return false;
+}
+
+function despesasInPainelPeriod(kind = state.painelFonte) {
+  return expenseRows(kind).filter(expenseInPainelPeriod);
 }
 
 function monthReceitas() {
@@ -969,16 +1048,16 @@ function gastoPorClasse503020(partial) {
     .reduce((a, x) => a + (num(x.realizado) || 0), 0);
 }
 
-function despesasPagasTotal() {
-  return monthDespesas()
+function despesasPagasTotal(list) {
+  return list
     .filter((d) => d.pago)
     .reduce((a, x) => a + (num(x.realizado) || 0), 0);
 }
 
 function metrics() {
-  const ds = monthDespesas();
+  const ds = despesasInPainelPeriod(state.painelFonte);
   const previsto = ds.reduce((a, x) => a + x.previsto, 0);
-  const realizado = despesasPagasTotal();
+  const realizado = despesasPagasTotal(ds);
   const pagar = ds.filter((x) => !x.pago).reduce((a, x) => a + x.previsto, 0);
   const atrasadas = ds.filter((x) => String(x.status).toLowerCase().includes("atras")).length;
   const breve = ds.filter((x) => String(x.status).toLowerCase().includes("breve")).length;
@@ -993,6 +1072,7 @@ function metrics() {
     uso: previsto ? realizado / previsto : 0,
     limite,
     usoLimite: limite ? realizado / limite : 0,
+    painelFonte: state.painelFonte,
   };
 }
 
@@ -1000,8 +1080,8 @@ function despValor(d) {
   return num(d.pago ? d.realizado || d.previsto : d.previsto);
 }
 
-function filteredDespesasBase() {
-  let list = monthDespesas();
+function filteredDespesasBase(kind = "despesa") {
+  let list = kind === "alasca" ? monthAlaska() : monthDespesas();
   if (state.catFilter) {
     const nk = normCat(state.catFilter);
     list = list.filter((d) => normCat(d.categoria) === nk);
@@ -1470,7 +1550,15 @@ function despDtLancamentoSortKey(d) {
 }
 
 function sortedDespesas() {
-  let list = filteredDespesasBase();
+  return sortedExpenseList("despesa");
+}
+
+function sortedAlaska() {
+  return sortedExpenseList("alasca");
+}
+
+function sortedExpenseList(kind) {
+  let list = filteredDespesasBase(kind);
   const q = state.query.trim();
 
   if (q && !isValueQuery(q) && !parseQueryDate(q)) {
@@ -1759,33 +1847,50 @@ function categoriaSheetView() {
 }
 
 function alascaView() {
-  const L = state.listas;
-  const chip = (list) =>
-  (list || [])
-    .map((x) => `<span class="chip">${esc(x)}</span>`)
-    .join("") || `<span class="muted" style="font-size:12px">—</span>`;
+  return expenseTabView({
+    kind: "alasca",
+    subtitle: "Motorhome — manutenção e acessórios",
+    title: "Alasca",
+    fabId: "fabAlaska",
+    scrollId: "alaskaScroll",
+    emptyMsg: "Nenhum lançamento do Alasca neste mês. Toque no + para lançar.",
+  });
+}
+
+function expenseTabView({ kind, subtitle, title, fabId, scrollId, emptyMsg }) {
+  const hit = state.searchHitRow;
+  const list = (kind === "alasca" ? sortedAlaska() : sortedDespesas())
+    .map(
+      (d) => `
+      <div class="item${d.sheetRow === hit ? " search-hit" : ""}" data-row="${d.sheetRow}" data-kind="${kind}" role="button" tabindex="0">
+        <span class="check ${d.pago ? "yes" : ""}" data-toggle-kind="${kind}" data-toggle-row="${d.sheetRow}">${d.pago ? "✓" : ""}</span>
+        <span class="mid"><b>${esc(d.descricao || "(sem descrição)")}</b><small>${despSubline(d)}</small></span>
+        <span class="right"><b>${brl(despValor(d))}</b><span class="pill ${pillClass(despesaStatusLabel(d))}">${esc(despesaStatusLabel(d))}</span></span>
+      </div>`
+    )
+    .join("");
   return `
-    <div class="scroll">
-      <div class="title">Alasca</div>
-      <p class="muted" style="font-size:12px;margin-top:6px">Mês de trabalho: <b>${esc(state.mes)} ${esc(state.ano)}</b></p>
-      <div class="alasca-block">
-        <h3>Contas</h3>
-        <div class="chip-row">${chip(L.contas)}</div>
+    <div class="scroll" id="${scrollId}">
+      <div class="hello">${esc(subtitle)}</div>
+      <div class="title-row">
+        <div class="title">${esc(title)}</div>
+        <div class="sort-btns">
+          <button type="button" class="sort-btn ${state.despSort === "vencimento" ? "on" : ""}" data-sort="vencimento">vencto</button>
+          <button type="button" class="sort-btn ${state.despSort === "pgto" ? "on" : ""}" data-sort="pgto">Pgto</button>
+          <button type="button" class="sort-btn ${state.despSort === "valor" ? "on" : ""}" data-sort="valor">valor</button>
+          <button type="button" class="sort-btn ${state.despSort === "lancto" ? "on" : ""}" data-sort="lancto">Lancto</button>
+        </div>
       </div>
-      <div class="alasca-block">
-        <h3>Formas de pagamento</h3>
-        <div class="chip-row">${chip(L.pagamentos)}</div>
+      <input class="search" id="q" placeholder="Descrição, valor (ex.: 150,00) ou data (dd/mm/aa)" value="${esc(state.query)}" />
+      <div class="chips">
+        <button class="chip ${state.filtro === "todas" ? "on" : ""}" data-filtro="todas">Todas</button>
+        <button class="chip ${state.filtro === "pagar" ? "on" : ""}" data-filtro="pagar">A pagar</button>
+        <button class="chip ${state.filtro === "atrasadas" ? "on" : ""}" data-filtro="atrasadas">Atrasadas</button>
+        ${state.catFilter ? `<button type="button" class="chip chip-cat on" data-clear-cat>✕ ${esc(state.catFilter)}</button>` : ""}
       </div>
-      <div class="alasca-block">
-        <h3>Tipos de despesa</h3>
-        <div class="chip-row">${chip(L.tipos)}</div>
-      </div>
-      <div class="alasca-block">
-        <h3>Prioridades</h3>
-        <div class="chip-row">${chip(L.prioridades)}</div>
-      </div>
-      <p class="muted" style="font-size:11px;margin-top:14px">Edite estas listas na aba <b>Listas</b> da planilha Google.</p>
-    </div>`;
+      ${list || `<div class="empty">${esc(emptyMsg)}</div>`}
+    </div>
+    <button class="fab" id="${fabId}">+</button>`;
 }
 
 function fluxoDailyChartHtml(rows) {
@@ -1925,7 +2030,7 @@ const PIE_CAT_COLORS = [
 
 function categoriasGastoPainel() {
   const totals = {};
-  monthDespesas().forEach((d) => {
+  despesasInPainelPeriod(state.painelFonte).forEach((d) => {
     const cat = String(d.categoria || "Outros").trim() || "Outros";
     const v = d.pago ? num(d.realizado) || num(d.previsto) : num(d.previsto);
     totals[cat] = (totals[cat] || 0) + v;
@@ -1941,7 +2046,7 @@ function categoriasGastoPainel() {
 function painelCategoriasPieHtml() {
   const { entries, total } = categoriasGastoPainel();
   if (!entries.length) {
-    return `<div class="empty pie-empty">Sem despesas no mês para o gráfico.</div>`;
+    return `<div class="empty pie-empty">Sem lançamentos no período para o gráfico.</div>`;
   }
   let acc = 0;
   const slices = entries.map((e, i) => {
@@ -1981,6 +2086,8 @@ function painelCategoriasPieHtml() {
 }
 
 function painelView(m) {
+  const { start, end } = painelPeriodBounds();
+  const fonteLbl = m.painelFonte === "alasca" ? "Alasca" : "Despesas";
   return `
     <div class="scroll">
       ${renderInstallHint()}
@@ -1992,8 +2099,18 @@ function painelView(m) {
           <button class="linkish" id="btnReload">${state.loading ? "Atualizando…" : "Atualizar"}</button>
         </div>
       </div>
+      <div class="period-row">
+        <label class="period-field"><span>Início</span><input type="date" id="painelDe" value="${esc(start)}" /></label>
+        <label class="period-field"><span>Fim</span><input type="date" id="painelAte" value="${esc(end)}" /></label>
+        <button type="button" class="period-go" id="btnPainelPeriod">Atualizar</button>
+      </div>
+      <div class="chips painel-fonte">
+        <button type="button" class="chip ${state.painelFonte === "despesas" ? "on" : ""}" data-painel-fonte="despesas">Despesas</button>
+        <button type="button" class="chip ${state.painelFonte === "alasca" ? "on" : ""}" data-painel-fonte="alasca">Alasca</button>
+      </div>
+      <p class="muted painel-period-hint">Painel: <b>${esc(fonteLbl)}</b> · período selecionado</p>
       <div class="grid2">
-        <div class="kpi"><span>PREVISTO</span><b>${brl(m.previsto)}</b><small class="kpi-hint">despesas no mês</small></div>
+        <div class="kpi"><span>PREVISTO</span><b>${brl(m.previsto)}</b><small class="kpi-hint">no período</small></div>
         <div class="kpi"><span>REALIZADO</span><b style="color:var(--rose)">${brl(m.realizado)}</b><small class="kpi-hint">só pagas</small></div>
         <div class="kpi"><span>USO DO PLANO</span><b>${m.previsto ? pct(m.uso * 100) : "—"}</b><small class="kpi-hint">realizado ÷ previsto</small></div>
         <div class="kpi"><span>A PAGAR</span><b style="color:var(--violet)">${brl(m.pagar)}</b><small class="kpi-hint">previsto em aberto</small></div>
@@ -2101,39 +2218,14 @@ function mesView() {
 }
 
 function despesasView() {
-  const hit = state.searchHitRow;
-  const list = sortedDespesas()
-    .map(
-      (d) => `
-      <div class="item${d.sheetRow === hit ? " search-hit" : ""}" data-row="${d.sheetRow}" data-kind="despesa" role="button" tabindex="0">
-        <span class="check ${d.pago ? "yes" : ""}" data-toggle="${d.sheetRow}">${d.pago ? "✓" : ""}</span>
-        <span class="mid"><b>${esc(d.descricao || "(sem descrição)")}</b><small>${despSubline(d)}</small></span>
-        <span class="right"><b>${brl(despValor(d))}</b><span class="pill ${pillClass(despesaStatusLabel(d))}">${esc(despesaStatusLabel(d))}</span></span>
-      </div>`
-    )
-    .join("");
-  return `
-    <div class="scroll" id="despScroll">
-      <div class="hello">Lançamentos do mês</div>
-      <div class="title-row">
-        <div class="title">Despesas</div>
-        <div class="sort-btns">
-          <button type="button" class="sort-btn ${state.despSort === "vencimento" ? "on" : ""}" data-sort="vencimento">vencto</button>
-          <button type="button" class="sort-btn ${state.despSort === "pgto" ? "on" : ""}" data-sort="pgto">Pgto</button>
-          <button type="button" class="sort-btn ${state.despSort === "valor" ? "on" : ""}" data-sort="valor">valor</button>
-          <button type="button" class="sort-btn ${state.despSort === "lancto" ? "on" : ""}" data-sort="lancto">Lancto</button>
-        </div>
-      </div>
-      <input class="search" id="q" placeholder="Descrição, valor (ex.: 150,00) ou data (dd/mm/aa)" value="${esc(state.query)}" />
-      <div class="chips">
-        <button class="chip ${state.filtro === "todas" ? "on" : ""}" data-filtro="todas">Todas</button>
-        <button class="chip ${state.filtro === "pagar" ? "on" : ""}" data-filtro="pagar">A pagar</button>
-        <button class="chip ${state.filtro === "atrasadas" ? "on" : ""}" data-filtro="atrasadas">Atrasadas</button>
-        ${state.catFilter ? `<button type="button" class="chip chip-cat on" data-clear-cat>✕ ${esc(state.catFilter)}</button>` : ""}
-      </div>
-      ${list || `<div class="empty">Nenhuma despesa neste mês. Toque no + para lançar.</div>`}
-    </div>
-    <button class="fab" id="fab">+</button>`;
+  return expenseTabView({
+    kind: "despesa",
+    subtitle: "Lançamentos do mês",
+    title: "Despesas",
+    fabId: "fab",
+    scrollId: "despScroll",
+    emptyMsg: "Nenhuma despesa neste mês. Toque no + para lançar.",
+  });
 }
 
 function receitasView() {
@@ -2173,6 +2265,7 @@ function sheetView() {
   const f = state.form;
   const L = state.listas;
   const isRec = state.sheetKind === "receita";
+  const isAlaska = state.sheetKind === "alasca";
   const body = isRec
     ? `
         <div class="field"><label>Descrição</label><input id="fDesc" value="${esc(f.descricao)}" placeholder="Ex.: Salário março" /></div>
@@ -2225,7 +2318,7 @@ function sheetView() {
           <div class="field"><label>Parcela</label><input id="fParc" value="${esc(f.parcela)}" placeholder="Ex.: 3/12" /></div>
           <div class="field"><label>Observações</label><input id="fObs" value="${esc(f.observacoes)}" placeholder="Opcional" /></div>
         </div>`;
-  const editingDesp = !isRec && state.editingRow;
+  const editingDesp = !isRec && state.editingRow && (state.sheetKind === "despesa" || state.sheetKind === "alasca");
   const deleteOverlay =
     state.deleteConfirm && editingDesp
       ? `
@@ -2243,7 +2336,7 @@ function sheetView() {
   return `
     <div class="sheet ${state.sheetOpen ? "open" : ""}" id="sheet">
       <div class="sheet-head">
-        <h2>${state.editingRow ? (isRec ? "Editar receita" : "Editar despesa") : isRec ? "Nova receita" : "Nova despesa"}</h2>
+        <h2>${state.editingRow ? (isRec ? "Editar receita" : isAlaska ? "Editar Alasca" : "Editar despesa") : isRec ? "Nova receita" : isAlaska ? "Novo lançamento Alasca" : "Nova despesa"}</h2>
         <div class="sheet-head-actions">
           ${editingDesp ? `<button type="button" class="sheet-del" id="btnDeleteDesp" aria-label="Excluir despesa"><span>🗑</span></button>` : ""}
           <button type="button" class="ghost" id="closeSheet" aria-label="Fechar">×</button>
@@ -2334,14 +2427,17 @@ function openNew(kind = "despesa") {
   state.moreOpen = false;
   state.sheetKind = kind;
   state.form = blankForm(kind);
-  if (kind === "despesa" && state.listas.categorias[0]) state.form.categoria = state.listas.categorias[0];
+  if ((kind === "despesa" || kind === "alasca") && state.listas.categorias[0]) {
+    state.form.categoria = state.listas.categorias[0];
+  }
   if (kind === "receita" && state.listas.fontes[0]) state.form.fonte = state.listas.fontes[0];
   state.sheetOpen = true;
   render();
 }
 
 function openEdit(row, kind = "despesa") {
-  const list = kind === "receita" ? state.receitas : state.despesas;
+  const list =
+    kind === "receita" ? state.receitas : kind === "alasca" ? state.alaskaDespesas : state.despesas;
   const d = list.find((x) => x.sheetRow === row);
   if (!d) return;
   state.editingRow = row;
@@ -2394,6 +2490,7 @@ async function saveSheet() {
   readFormFromDom();
   const f = state.form;
   const isRec = state.sheetKind === "receita";
+  const isAlaska = state.sheetKind === "alasca";
   const label = isRec ? "fonte ou descrição" : "descrição";
   if (!f.descricao.trim() && !(isRec && f.fonte)) {
     showToast(`Preencha a ${label}.`);
@@ -2422,9 +2519,11 @@ async function saveSheet() {
       }
     }
   }
-  const idx = (isRec ? state._recMeta : state._despMeta)?.idx || {};
-  const sheet = isRec ? "Receitas" : "Despesas";
-  const row = state.editingRow || firstEmptyRow(isRec ? state._recMeta : state._despMeta, isRec ? state.receitas : state.despesas);
+  const idx = (isRec ? state._recMeta : isAlaska ? state._alaskaMeta : state._despMeta)?.idx || {};
+  const sheet = sheetTitleForKind(isAlaska ? "alasca" : isRec ? "receita" : "despesa");
+  const meta = isRec ? state._recMeta : isAlaska ? state._alaskaMeta : state._despMeta;
+  const rows = isRec ? state.receitas : isAlaska ? state.alaskaDespesas : state.despesas;
+  const row = state.editingRow || firstEmptyRow(meta, rows);
   const competencia = `${state.ano}-${String(state.mesNum).padStart(2, "0")}-01`;
   const previsto = num(f.previsto);
   const realizado = f.pago ? num(f.realizado || f.previsto) : num(f.realizado);
@@ -2456,7 +2555,7 @@ async function saveSheet() {
         observacoes: f.observacoes,
         tipoPgto: f.tipoPgto || "",
       };
-  if (!isRec) {
+  if (!isRec && (state.sheetKind === "despesa" || state.sheetKind === "alasca")) {
     writes.dataPagamento = f.pago ? isoToBR(despesaDataPagamento(f)) : "";
     if (!state.editingRow) writes.dtLancamento = nowDateTimeBR();
   }
@@ -2492,13 +2591,14 @@ async function saveSheet() {
 
 async function togglePago(row, ev, kind = "despesa") {
   ev.stopPropagation();
-  const list = kind === "receita" ? state.receitas : state.despesas;
-  const sheet = kind === "receita" ? "Receitas" : "Despesas";
+  const list =
+    kind === "receita" ? state.receitas : kind === "alasca" ? state.alaskaDespesas : state.despesas;
+  const sheet = sheetTitleForKind(kind);
   const d = list.find((x) => x.sheetRow === row);
   if (!d || d.idx?.pago == null) return;
   const next = !d.pago;
   if (next) {
-    if (kind === "despesa") {
+    if (kind === "despesa" || kind === "alasca") {
       const dt = despesaDataPagamento(d);
       if (!dt) {
         showToast("Informe o vencimento antes de marcar como pago.");
@@ -2522,13 +2622,15 @@ async function togglePago(row, ev, kind = "despesa") {
       }
     }
   }
-  const pagoCol = kind === "despesa" ? despColIdx(d.idx, "pago") : d.idx.pago;
+  const pagoCol =
+    kind === "receita" ? d.idx.pago : despColIdx(d.idx, "pago");
   const data = [{ range: `${sheet}!${colLetter(pagoCol)}${row}`, values: [[next]] }];
   if (next && !d.realizado && d.previsto) {
-    const realCol = kind === "despesa" ? despColIdx(d.idx, "realizado") : d.idx.realizado;
+    const realCol =
+      kind === "receita" ? d.idx.realizado : despColIdx(d.idx, "realizado");
     data.push({ range: `${sheet}!${colLetter(realCol)}${row}`, values: [[d.previsto]] });
   }
-  if (kind === "despesa") {
+  if (kind === "despesa" || kind === "alasca") {
     const pgtoCol = despColIdx(d.idx, "dataPagamento");
     if (next) {
       const pgto = despesaDataPagamento(d);
@@ -2553,19 +2655,29 @@ async function togglePago(row, ev, kind = "despesa") {
   }
 }
 
-async function getDespesasSheetId() {
-  if (state._despSheetId != null) return state._despSheetId;
+async function getSheetIdByTitle(title, cacheKey) {
+  if (state[cacheKey] != null) return state[cacheKey];
   const data = await api("?fields=sheets(properties(sheetId,title))");
-  const sheet = (data.sheets || []).find((s) => s.properties?.title === "Despesas");
-  if (!sheet) throw new Error("Aba Despesas não encontrada na planilha.");
-  state._despSheetId = sheet.properties.sheetId;
-  return state._despSheetId;
+  const sheet = (data.sheets || []).find((s) => s.properties?.title === title);
+  if (!sheet) throw new Error(`Aba ${title} não encontrada na planilha.`);
+  state[cacheKey] = sheet.properties.sheetId;
+  return state[cacheKey];
+}
+
+async function getDespesasSheetId() {
+  return getSheetIdByTitle("Despesas", "_despSheetId");
+}
+
+async function getAlaskaSheetId() {
+  return getSheetIdByTitle("Alasca", "_alaskaSheetId");
 }
 
 function openDeleteConfirm(row) {
-  const d = state.despesas.find((x) => x.sheetRow === row);
+  const kind = state.sheetKind === "alasca" ? "alasca" : "despesa";
+  const list = kind === "alasca" ? state.alaskaDespesas : state.despesas;
+  const d = list.find((x) => x.sheetRow === row);
   if (!d) return;
-  state.deleteConfirm = { row, descricao: d.descricao || "(sem descrição)" };
+  state.deleteConfirm = { row, kind, descricao: d.descricao || "(sem descrição)" };
   render();
 }
 
@@ -2574,8 +2686,9 @@ function closeDeleteConfirm() {
   render();
 }
 
-async function deleteExpense(row) {
-  const sheetId = await getDespesasSheetId();
+async function deleteExpense(row, kind = "despesa") {
+  const sheetId =
+    kind === "alasca" ? await getAlaskaSheetId() : await getDespesasSheetId();
   state.loading = true;
   state.deleteConfirm = null;
   state.sheetOpen = false;
@@ -2635,8 +2748,15 @@ function bindRootActions() {
       state.filtro = "todas";
       state.query = "";
       state.searchHitRow = null;
-      state.tab = "despesas";
+      state.tab = state.painelFonte === "alasca" ? "alasca" : "despesas";
       state.sheetOpen = false;
+      render();
+      return;
+    }
+    const painelFonteBtn = e.target.closest("[data-painel-fonte]");
+    if (painelFonteBtn) {
+      state.painelFonte = painelFonteBtn.dataset.painelFonte;
+      savePainelPeriodToStore();
       render();
       return;
     }
@@ -2677,13 +2797,18 @@ function bindRootActions() {
       return;
     }
     const itemBtn = e.target.closest(".item[data-row]");
-    if (itemBtn && !e.target.closest("[data-toggle]") && !e.target.closest("[data-toggle-rec]")) {
+    if (
+      itemBtn &&
+      !e.target.closest("[data-toggle]") &&
+      !e.target.closest("[data-toggle-kind]") &&
+      !e.target.closest("[data-toggle-rec]")
+    ) {
       openEdit(Number(itemBtn.dataset.row), itemBtn.dataset.kind || "despesa");
       return;
     }
-    const toggleDesp = e.target.closest("[data-toggle]");
-    if (toggleDesp) {
-      togglePago(Number(toggleDesp.dataset.toggle), e, "despesa");
+    const toggleKindBtn = e.target.closest("[data-toggle-kind]");
+    if (toggleKindBtn) {
+      togglePago(Number(toggleKindBtn.dataset.toggleRow), e, toggleKindBtn.dataset.toggleKind || "despesa");
       return;
     }
     const toggleRec = e.target.closest("[data-toggle-rec]");
@@ -2704,7 +2829,9 @@ function bindRootActions() {
     }
     if (e.target.closest("#deleteYes")) {
       e.preventDefault();
-      if (state.deleteConfirm?.row) deleteExpense(state.deleteConfirm.row);
+      if (state.deleteConfirm?.row) {
+        deleteExpense(state.deleteConfirm.row, state.deleteConfirm.kind || "despesa");
+      }
     }
   });
 }
@@ -2773,7 +2900,16 @@ function bind() {
     render();
   });
   on("fab", "click", () => openNew("despesa"));
+  on("fabAlaska", "click", () => openNew("alasca"));
   on("fabRec", "click", () => openNew("receita"));
+  on("btnPainelPeriod", "click", () => {
+    const de = document.getElementById("painelDe");
+    const ate = document.getElementById("painelAte");
+    if (de) state.painelDe = de.value;
+    if (ate) state.painelAte = ate.value;
+    savePainelPeriodToStore();
+    render();
+  });
   on("closeSheet", "click", () => {
     state.sheetOpen = false;
     render();
@@ -2797,7 +2933,9 @@ function bind() {
     }
     state.form.pago = next;
     if (state.form.pago && !state.form.realizado) state.form.realizado = state.form.previsto;
-    if (state.form.pago && state.sheetKind === "despesa") syncDespesaDatasPago(state.form);
+    if (state.form.pago && (state.sheetKind === "despesa" || state.sheetKind === "alasca")) {
+      syncDespesaDatasPago(state.form);
+    }
     render();
   });
   on("saveBtn", "click", saveSheet);

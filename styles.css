@@ -156,6 +156,41 @@ body {
   color: var(--teal-2);
   font-weight: 600;
 }
+.period-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 8px;
+  align-items: end;
+  margin-top: 12px;
+}
+.period-field { display: flex; flex-direction: column; gap: 4px; }
+.period-field span {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--teal);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.period-field input {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 8px;
+  font: inherit;
+  font-size: 13px;
+  background: #fff;
+}
+.period-go {
+  border: 0;
+  border-radius: 12px;
+  padding: 11px 12px;
+  background: var(--teal);
+  color: #fff;
+  font-weight: 700;
+  font-size: 12px;
+  font-family: inherit;
+}
+.painel-fonte { margin-top: 10px; }
+.painel-period-hint { font-size: 11px; margin-top: 8px; margin-bottom: 4px; }
 .flux-hero .sub { font-size: 11px; margin-top: 6px; opacity: 0.9; }
 .flux-row {
   display: block;
