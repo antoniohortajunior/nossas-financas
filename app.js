@@ -1,4 +1,4 @@
-const APP_VERSION = "51";
+const APP_VERSION = "52";
 const INSTALL_HINT_KEY = "financas-install-hint-v11";
 const KEY = "minhas-financas-config";
 const SCOPE =
@@ -27,6 +27,7 @@ const state = {
   mesEnd: "",
   despesas: [],
   receitas: [],
+  categorias: [],
   orcamento: [],
   listas: { categorias: [], tipos: [], prioridades: [], pagamentos: [], contas: [] },
   query: "",
@@ -659,22 +660,53 @@ function parseTables(batch) {
   state.mesNum = Number(String(cfg[3]?.[0] ?? "").replace(",", ".")) || (idxMes >= 0 ? idxMes + 1 : new Date().getMonth() + 1);
   state.mesStart = serialToISO(cfg[5]?.[0]);
   state.mesEnd = serialToISO(cfg[6]?.[0]);
-  state.saldoInicial = num(cfg[8]?.[0]);
-  state.metaPoupanca = num(cfg[9]?.[0]) || 0.2;
-
   const listas = byRange.Listas || [];
   const pickCol = (c, from = 1) =>
     listas.slice(from).map((r) => r[c]).filter((v) => v != null && String(v).trim() !== "");
-  const catalog = parseListasCatalog(listas);
+
+  function parseCategorias(values) {
+    let headerRow = 0;
+    for (let i = 0; i < Math.min(values.length, 8); i++) {
+      const joined = (values[i] || []).map((x) => String(x || "")).join(" ").toLowerCase();
+      if (joined.includes("categoria") && (joined.includes("orçamento") || joined.includes("orcamento"))) {
+        headerRow = i;
+        break;
+      }
+    }
+    const rows = [];
+    for (let i = headerRow + 1; i < values.length; i++) {
+      const r = values[i] || [];
+      const nome = String(r[0] || "").trim();
+      if (!nome) continue;
+      rows.push({
+        categoria: nome,
+        limite: num(r[1]),
+        previsto: num(r[2]),
+        realizado: num(r[3]),
+        pct: num(r[4]),
+        situacao: String(r[5] || "").trim(),
+      });
+    }
+    return rows;
+  }
+
+  const cats = parseCategorias(byRange.Categorias || []);
+  state.categorias = cats;
+  const limitesPorCategoria = {};
+  const nomes = [];
+  for (const c of cats) {
+    nomes.push(c.categoria);
+    if (c.limite) limitesPorCategoria[c.categoria] = c.limite;
+  }
   state.listas = {
-    categorias: pickCol(0),
-    classesPorCategoria: catalog.classes,
-    limitesPorCategoria: catalog.limites,
-    tipos: pickCol(6).length ? pickCol(6) : ["Fixo", "Variável", "Assinatura"],
-    prioridades: pickCol(7).length ? pickCol(7) : ["Alta", "Média", "Baixa"],
-    pagamentos: pickCol(8).length ? pickCol(8) : ["Pix", "Débito", "Crédito", "Dinheiro", "Carnê"],
-    contas: pickCol(9).length ? pickCol(9) : ["Nubank", "Itaú", "Carteira"],
-    fontes: pickCol(11).length ? pickCol(11) : ["Salário", "Extra", "Rendimentos"],
+    categorias: nomes.length ? nomes : pickCol(0),
+    classesPorCategoria: {},
+    limitesPorCategoria,
+    tipos: pickCol(0).length ? pickCol(0) : ["Fixo", "Variável", "Assinatura"],
+    prioridades: pickCol(1).length ? pickCol(1) : ["Alta", "Média", "Baixa"],
+    pagamentos: pickCol(2).length ? pickCol(2) : ["Pix", "Débito", "Crédito", "Dinheiro", "Carnê"],
+    contas: pickCol(3).length ? pickCol(3) : ["Nubank", "Itaú", "Carteira"],
+    fontes: [],
   };
 
   function parseSheet(values, kind) {
@@ -753,14 +785,19 @@ function parseTables(batch) {
   }
 
   const d = parseSheet(byRange.Despesas || [], "despesa");
-  const rec = parseSheet(byRange.Receitas || [], "receita");
-  const orc = parseSheet(byRange.Orçamento || byRange.Orcamento || [], "orcamento");
   state._despMeta = d;
-  state._recMeta = rec;
+  state._recMeta = null;
   state.despesas = d.rows;
-  state.receitas = rec.rows;
-  state.orcamento = orc.rows;
-  hydrateOrcamentoMeta();
+  state.receitas = [];
+  state.orcamento = state.categorias.map((c) => ({
+    categoria: c.categoria,
+    limite: c.limite,
+    previsto: c.previsto,
+    realizado: c.realizado,
+    pct: c.pct,
+    situacao: c.situacao,
+    restante: Math.max((c.limite || 0) - (c.realizado || 0), 0),
+  }));
   enrichOrcamentoFromDespesas();
   hydrateOrcamentoMeta();
 }
@@ -842,31 +879,18 @@ async function refresh() {
   render();
   try {
     const data = await batchGetRanges([
-      "Config!B4:B13",
-      "Despesas!A1:T400",
-      "Receitas!A1:L200",
-      "Listas!A4:L50",
+      "Config!B4:B14",
+      "Despesas!A1:U400",
+      "Categorias!A1:F60",
+      "Listas!G4:N20",
     ]);
-    try {
-      const orc = await batchGetRanges(["Orçamento!A1:J30"]);
-      data.valueRanges = data.valueRanges.concat(orc.valueRanges);
-    } catch {
-      try {
-        const orc = await batchGetRanges(["Orcamento!A1:J30"]);
-        data.valueRanges = data.valueRanges.concat(orc.valueRanges);
-      } catch (_) {}
-    }
     parseTables(data);
-    try {
-      await loadFluxoSheet();
-    } catch {
-      state.fluxoDias = [];
-      state.fluxoFromSheet = false;
-      state.ultimaConsolidacao = null;
-    }
+    state.fluxoDias = [];
+    state.fluxoFromSheet = false;
+    state.ultimaConsolidacao = null;
     const monthCount = monthDespesas().length;
     if (!state.despesas.length) {
-      state.hint = "Nenhuma linha na aba Despesas. A planilha precisa das abas Config, Despesas, Receitas e Listas (modelo Minhas Finanças).";
+      state.hint = "Nenhuma linha na aba Despesas. A planilha precisa das abas Config, Despesas, Categorias e Listas.";
     } else if (!monthCount) {
       state.hint = `${state.despesas.length} linha(s) na planilha, ${monthCount} no mês ${state.mes}/${state.ano}. Confira Config (B5/B6) e Competência ou Vencimento.`;
     }
@@ -947,40 +971,20 @@ function despesasPagasTotal() {
 
 function metrics() {
   const ds = monthDespesas();
-  const receitas = receitasRecebidasTotal();
   const previsto = ds.reduce((a, x) => a + x.previsto, 0);
   const realizado = despesasPagasTotal();
   const pagar = ds.filter((x) => !x.pago).reduce((a, x) => a + x.previsto, 0);
   const atrasadas = ds.filter((x) => String(x.status).toLowerCase().includes("atras")).length;
   const breve = ds.filter((x) => String(x.status).toLowerCase().includes("breve")).length;
-  const nec = gastoPorClasse503020("necessidade");
-  const des = gastoPorClasse503020("desejo");
-  const pou = gastoPorClasse503020("poupan");
-  const limite = state.orcamento
-    .filter((o) => isOrcamentoDataRow(o.categoria))
-    .reduce((a, x) => a + (x.limite || 0), 0);
-  const saldo = receitas - realizado;
-  const taxaPoupancaP = receitas ? (saldo / receitas) * 100 : 0;
-  const metaPoupancaP = (Number(state.metaPoupanca) || 0.2) * 100;
+  const limite = state.categorias.reduce((a, x) => a + (x.limite || 0), 0);
   return {
-    receitas,
     previsto,
     realizado,
-    saldo,
     pagar,
-    sobrando: saldo - pagar,
     economia: previsto - realizado,
     atrasadas,
     breve,
     uso: previsto ? realizado / previsto : 0,
-    taxaPoupancaP,
-    metaPoupancaP,
-    nec,
-    des,
-    pou,
-    necP: receitas ? (nec / receitas) * 100 : 0,
-    desP: receitas ? (des / receitas) * 100 : 0,
-    pouP: receitas ? (pou / receitas) * 100 : 0,
     limite,
     usoLimite: limite ? realizado / limite : 0,
   };
@@ -1629,12 +1633,9 @@ function setupView() {
 
 function tabs() {
   return `
-    <nav class="tabs tabs-5">
+    <nav class="tabs tabs-2">
       <button class="tab ${state.tab === "painel" ? "on" : ""}" data-tab="painel">Painel</button>
-      <button class="tab ${state.tab === "fluxo" ? "on" : ""}" data-tab="fluxo">Fluxo</button>
       <button class="tab ${state.tab === "despesas" ? "on" : ""}" data-tab="despesas">Despesas</button>
-      <button class="tab ${state.tab === "receitas" ? "on" : ""}" data-tab="receitas">Receitas</button>
-      <button class="tab ${state.tab === "mes" ? "on" : ""}" data-tab="mes">Mês</button>
     </nav>`;
 }
 
@@ -1837,40 +1838,21 @@ function painelView(m) {
       <div class="topbar">
         <div class="hello">Olá, ${esc(state.nome)} <span class="app-ver">v${APP_VERSION}</span></div>
         <div class="topbar-actions">
-          <button type="button" class="btn-orc-mini" id="btnOrcamento">orçamento</button>
+          <button type="button" class="btn-orc-mini" id="btnOrcamento">categorias</button>
           ${renderFullscreenBarBtn()}
           <button class="linkish" id="btnReload">${state.loading ? "Atualizando…" : "Atualizar"}</button>
         </div>
       </div>
-      <div class="hero hero-sobrando">
-        <div class="lbl">Sobrando</div>
-        <div class="val">${brl(m.sobrando)}</div>
-        <div class="sub">saldo do mês − a pagar ainda</div>
-      </div>
       <div class="grid2">
-        <div class="kpi"><span>RECEITAS</span><b style="color:var(--emerald)">${brl(m.receitas)}</b><small class="kpi-hint">só recebidas</small></div>
-        <div class="kpi"><span>PREVISTO</span><b>${brl(m.previsto)}</b><small class="kpi-hint">despesas no plano</small></div>
+        <div class="kpi"><span>PREVISTO</span><b>${brl(m.previsto)}</b><small class="kpi-hint">despesas no mês</small></div>
         <div class="kpi"><span>REALIZADO</span><b style="color:var(--rose)">${brl(m.realizado)}</b><small class="kpi-hint">só pagas</small></div>
-        <div class="kpi"><span>A PAGAR AINDA</span><b style="color:var(--violet)">${brl(m.pagar)}</b><small class="kpi-hint">previsto em aberto</small></div>
-        <div class="kpi"><span>USO DO ORÇAMENTO</span><b>${m.previsto ? pct(m.uso * 100) : "—"}</b><small class="kpi-hint">realizado ÷ previsto</small></div>
-        <div class="kpi"><span>SALDO DO MÊS</span><b>${brl(m.saldo)}</b><small class="kpi-hint">receitas realizadas − despesas realizadas</small></div>
+        <div class="kpi"><span>USO DO PLANO</span><b>${m.previsto ? pct(m.uso * 100) : "—"}</b><small class="kpi-hint">realizado ÷ previsto</small></div>
+        <div class="kpi"><span>A PAGAR</span><b style="color:var(--violet)">${brl(m.pagar)}</b><small class="kpi-hint">previsto em aberto</small></div>
       </div>
-      <div class="section">Termômetro</div>
-      <div class="grid2">
-        <div class="kpi"><span>TAXA DE POUPANÇA</span><b>${pct(m.taxaPoupancaP)}</b></div>
-        <div class="kpi"><span>ECONOMIA VS. PREVISTO</span><b style="color:${m.economia >= 0 ? "var(--emerald)" : "var(--rose)"}">${brl(m.economia)}</b></div>
-      </div>
-      <div class="section">Regra 50-30-20</div>
-      <div class="bar-row"><div class="top"><span>Necessidades (meta 50%)</span><span>${brl(m.nec)} · ${pct(m.necP)}</span></div><div class="track"><div class="fill" style="width:${Math.min(m.necP, 100)}%;background:var(--teal)"></div></div></div>
-      <div class="bar-row"><div class="top"><span>Desejos (meta 30%)</span><span>${brl(m.des)} · ${pct(m.desP)}</span></div><div class="track"><div class="fill" style="width:${Math.min(m.desP, 100)}%;background:var(--amber)"></div></div></div>
-      <div class="bar-row"><div class="top"><span>Poupança (meta 20%)</span><span>${brl(m.pou)} · ${pct(m.pouP)}</span></div><div class="track"><div class="fill" style="width:${Math.min(m.pouP, 100)}%;background:var(--emerald)"></div></div></div>
-      ${m.receitas === 0 ? `<p class="muted" style="margin-top:8px;font-size:12px">Os % usam receitas recebidas no mês. Marque Recebido? nas receitas para calcular.</p>` : ""}
-      <div class="section">Leituras</div>
-      <div class="alert"><span class="dot" style="background:${m.realizado <= m.previsto ? "var(--emerald)" : "var(--rose)"}"></span> ${m.realizado <= m.previsto ? "Despesas realizadas ainda dentro do previsto" : "Você já gastou mais do que o previsto neste mês"}</div>
-      <div class="alert"><span class="dot" style="background:${m.saldo >= 0 ? "var(--emerald)" : "var(--rose)"}"></span> ${m.saldo >= 0 ? "Há saldo positivo neste mês" : "O saldo do mês está negativo: a renda realizada não cobre os gastos"}</div>
+      <div class="section">Resumo</div>
+      <div class="alert"><span class="dot" style="background:${m.realizado <= m.previsto ? "var(--emerald)" : "var(--rose)"}"></span> ${m.realizado <= m.previsto ? "Despesas pagas ainda dentro do previsto" : "Você já gastou mais do que o previsto neste mês"}</div>
       <div class="alert"><span class="dot" style="background:${m.atrasadas ? "var(--rose)" : m.breve ? "var(--amber)" : "var(--emerald)"}"></span> ${m.atrasadas ? `${m.atrasadas} conta(s) atrasada(s)` : m.breve ? `${m.breve} conta(s) vencem em breve` : "Nenhuma conta atrasada no mês"}</div>
-      <div class="alert"><span class="dot" style="background:${m.uso > 1 ? "var(--rose)" : "var(--emerald)"}"></span> ${m.previsto ? (m.uso > 1 ? `O orçamento estourou (${pct(m.uso * 100)} do previsto)` : `Uso do orçamento em ${pct(m.uso * 100)}`) : "Sem despesas previstas no mês"}</div>
-      ${m.receitas > 0 ? `<div class="alert"><span class="dot" style="background:${m.taxaPoupancaP >= m.metaPoupancaP ? "var(--emerald)" : "var(--amber)"}"></span> ${m.taxaPoupancaP >= m.metaPoupancaP ? "Meta de poupança no caminho" : `A poupança está abaixo da meta de ${pct(m.metaPoupancaP)} da renda`}</div>` : ""}
+      <div class="alert"><span class="dot" style="background:${m.economia >= 0 ? "var(--emerald)" : "var(--rose)"}"></span> Economia vs. previsto: ${brl(m.economia)}</div>
       <div class="section">Gastos por categoria</div>
       ${painelCategoriasPieHtml()}
       ${state.error ? `<p class="error">${esc(state.error)}</p>` : ""}
@@ -1910,7 +1892,7 @@ function orcamentoOverlay(m) {
   return `
     <div class="sheet orc-sheet ${state.orcamentoOpen ? "open" : ""}" id="orcSheet">
       <div class="sheet-head">
-        <h2>Orçamento</h2>
+        <h2>Categorias</h2>
         <div class="sheet-head-actions">
           <button type="button" class="ghost" id="closeOrcamento" aria-label="Fechar">×</button>
         </div>
@@ -2128,10 +2110,11 @@ function appView() {
   const m = metrics();
   let body = "";
   if (state.tab === "painel") body = painelView(m);
-  if (state.tab === "fluxo") body = fluxoView();
-  if (state.tab === "mes") body = mesView();
   if (state.tab === "despesas") body = despesasView();
-  if (state.tab === "receitas") body = receitasView();
+  if (["fluxo", "receitas", "mes"].includes(state.tab)) {
+    state.tab = "painel";
+    body = painelView(m);
+  }
   const orc = state.orcamentoOpen ? orcamentoOverlay(m) : "";
   return `<div class="app ${state.loading ? "busy" : ""}">${body}${tabs()}${orc}${sheetView()}
     <div class="toast ${state.toast ? "show" : ""}">${esc(state.toast)}</div></div>`;
