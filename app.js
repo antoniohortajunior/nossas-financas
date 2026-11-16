@@ -1,4 +1,4 @@
-const APP_VERSION = "62";
+const APP_VERSION = "64";
 /** Primeira linha de lançamentos nas abas Despesas / Alasca / Gastos Viagem (cabeçalho na linha 4). */
 const DESP_DATA_START = 5;
 const VIAGENS_SHEET = "Viagens";
@@ -408,6 +408,9 @@ function parseGastosViagemFixed(values) {
   for (let i = 0; i < (values || []).length; i++) {
     const r = values[i] || [];
     if (!despesaRowHasData(r)) continue;
+    const descricao = String(r[idx.descricao] ?? r[3] ?? "").trim();
+    const temValor = num(r[idx.previsto] ?? r[10]) || num(r[idx.realizado] ?? r[11]);
+    if (!descricao && !temValor) continue;
     const compRaw = r[idx.competencia] ?? r[1] ?? "";
     rows.push({
       sheetRow: DESP_DATA_START + i,
@@ -415,7 +418,7 @@ function parseGastosViagemFixed(values) {
       competenciaRaw: compRaw,
       competencia: serialToISO(compRaw),
       categoria: String(r[idx.categoria] ?? r[2] ?? ""),
-      descricao: String(r[idx.descricao] ?? r[3] ?? ""),
+      descricao,
       tipo: String(r[idx.tipo] ?? r[4] ?? ""),
       vencimento: serialToISO(r[idx.vencimento] ?? r[5]),
       prioridade: String(r[idx.prioridade] ?? r[7] ?? ""),
@@ -2013,22 +2016,32 @@ function setupView() {
   return loginView();
 }
 
-function tabs() {
+function bottomDock() {
+  const travelOn = state.tab === "viagens" || state.tab === "gastosviagem";
   return `
-    <nav class="tabs tabs-4">
-      <button class="tab ${state.tab === "painel" ? "on" : ""}" data-tab="painel">Painel</button>
-      <button class="tab ${state.tab === "despesas" ? "on" : ""}" data-tab="despesas">Despesas</button>
-      <button class="tab ${state.tab === "categorias" ? "on" : ""}" data-tab="categorias">Categorias</button>
-      <button class="tab ${state.tab === "alasca" ? "on" : ""}" data-tab="alasca">Alasca</button>
-    </nav>`;
-}
-
-function travelBar() {
-  return `
-    <div class="travel-bar">
-      <button type="button" class="travel-btn ${state.tab === "viagens" ? "on" : ""}" data-tab="viagens">Minhas Viagens</button>
-      <button type="button" class="travel-btn ${state.tab === "gastosviagem" ? "on" : ""}" data-tab="gastosviagem">Gastos na Viagem</button>
-    </div>`;
+    <footer class="bottom-dock" role="navigation" aria-label="Menu principal">
+      <nav class="dock-main tabs-4">
+        <button type="button" class="tab ${state.tab === "painel" ? "on" : ""}" data-tab="painel">
+          <span class="dock-ico" aria-hidden="true">◈</span><span class="dock-lbl">Painel</span>
+        </button>
+        <button type="button" class="tab ${state.tab === "despesas" ? "on" : ""}" data-tab="despesas">
+          <span class="dock-ico" aria-hidden="true">≡</span><span class="dock-lbl">Despesas</span>
+        </button>
+        <button type="button" class="tab ${state.tab === "categorias" ? "on" : ""}" data-tab="categorias">
+          <span class="dock-ico" aria-hidden="true">▦</span><span class="dock-lbl">Categ.</span>
+        </button>
+        <button type="button" class="tab ${state.tab === "alasca" ? "on" : ""}" data-tab="alasca">
+          <span class="dock-ico" aria-hidden="true">⌂</span><span class="dock-lbl">Alasca</span>
+        </button>
+      </nav>
+      <div class="dock-travel ${travelOn ? "dock-travel--active" : ""}">
+        <span class="dock-travel-title">Viagens</span>
+        <div class="dock-travel-btns">
+          <button type="button" class="travel-btn ${state.tab === "viagens" ? "on" : ""}" data-tab="viagens">Cadastro</button>
+          <button type="button" class="travel-btn ${state.tab === "gastosviagem" ? "on" : ""}" data-tab="gastosviagem">Gastos</button>
+        </div>
+      </div>
+    </footer>`;
 }
 
 function firstEmptyCategoriaRow() {
@@ -2866,7 +2879,7 @@ function appView() {
   else if (state.tab === "gastosviagem") body = gastosViagemView();
   else body = painelView(m);
   const orc = state.orcamentoOpen ? orcamentoOverlay(m) : "";
-  return `<div class="app ${state.loading ? "busy" : ""}">${body}${tabs()}${travelBar()}${orc}${categoriaSheetView()}${viagemCadastroSheetView()}${sheetView()}
+  return `<div class="app ${state.loading ? "busy" : ""}">${body}${bottomDock()}${orc}${categoriaSheetView()}${viagemCadastroSheetView()}${sheetView()}
     <div class="toast ${state.toast ? "show" : ""}">${esc(state.toast)}</div></div>`;
 }
 
@@ -3050,41 +3063,6 @@ async function resolveNewDespRow(sheetTitle, meta, rows) {
   return start + used.size;
 }
 
-function buildDespRowLine(idx, writes, includeViagem) {
-  const width = 23;
-  const line = new Array(width).fill("");
-  for (const [field, value] of Object.entries(writes)) {
-    if (field === "viagem" && !includeViagem) continue;
-    const col = despColIdx(idx, field);
-    if (col == null || col < 0 || col >= width) continue;
-    line[col] = value === false || value === true ? value : value ?? "";
-  }
-  return line;
-}
-
-async function appendDespesaRow(sheetTitle, idx, writes, includeViagem) {
-  const line = buildDespRowLine(idx, writes, includeViagem);
-  const range = sheetRange(sheetTitle, `A${DESP_DATA_START}:W`);
-  return api(
-    `/values/${encodeURIComponent(range)}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
-    {
-      method: "POST",
-      body: JSON.stringify({ values: [line] }),
-    }
-  );
-}
-
-async function reloadGastosViagemFromSheet() {
-  try {
-    const snap = await batchGetRanges([sheetRange(GASTOS_VIAGEM_SHEET, `A${DESP_DATA_START}:W500`)]);
-    const vals = snap.valueRanges?.[0]?.values || [];
-    const gv = parseGastosViagemFixed(vals);
-    state.gastosViagem = gv.rows;
-    state._gastosViagemMeta = gv;
-    state._gastosViagemSheetValues = vals;
-  } catch (_) {}
-}
-
 async function saveSheet() {
   readFormFromDom();
   const f = state.form;
@@ -3143,7 +3121,7 @@ async function saveSheet() {
   const idx = isRec
     ? (state._recMeta?.idx || {})
     : isGastoViagem
-      ? { ...baseIdx, ...(state._gastosViagemMeta?.idx || {}), viagem: DESP_COL.viagem }
+      ? defaultDespIdx()
       : isAlaska
         ? { ...baseIdx, ...(state._alaskaMeta?.idx || {}) }
         : { ...baseIdx, ...(state._despMeta?.idx || {}) };
@@ -3180,6 +3158,10 @@ async function saveSheet() {
     (isRec
       ? firstEmptyRow(meta, rows, sheetValues)
       : await resolveNewDespRow(sheet, meta, rows));
+  if (!isRec && !state.editingRow && row < DESP_DATA_START) {
+    showToast(`Gravação na linha ${row} inválida. Toque Atualizar e tente de novo.`);
+    return;
+  }
   const competencia =
     isGastoViagem && f.vencimento?.length >= 7
       ? `${f.vencimento.slice(0, 7)}-01`
@@ -3239,24 +3221,14 @@ async function saveSheet() {
   state.loading = true;
   render();
   try {
-    const appendNewGastoViagem = isGastoViagem && !state.editingRow;
-    if (appendNewGastoViagem) {
-      await appendDespesaRow(sheet, idx, writes, true);
-    } else {
-      await api("/values:batchUpdate?valueInputOption=USER_ENTERED", {
-        method: "POST",
-        body: JSON.stringify({ valueInputOption: "USER_ENTERED", data }),
-      });
-    }
+    await api("/values:batchUpdate?valueInputOption=USER_ENTERED", {
+      method: "POST",
+      body: JSON.stringify({ valueInputOption: "USER_ENTERED", data }),
+    });
     state.sheetOpen = false;
+    state.editingRow = null;
     showToast("Salvo. Status e % calculam na planilha.");
-    if (appendNewGastoViagem) {
-      await reloadGastosViagemFromSheet();
-      state.loading = false;
-      render();
-    } else {
-      await refresh();
-    }
+    await refresh();
   } catch (err) {
     state.loading = false;
     let msg = err.message || String(err);

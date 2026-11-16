@@ -35,7 +35,7 @@ body {
   box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.06);
 }
 .scroll {
-  padding: calc(18px + var(--safe-top)) 18px calc(178px + var(--safe-bot));
+  padding: calc(18px + var(--safe-top)) 18px calc(142px + var(--safe-bot));
 }
 .hello { font-size: 13px; color: var(--muted); }
 .app-ver {
@@ -92,33 +92,63 @@ body {
   align-items: center;
 }
 .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-.tabs {
+.bottom-dock {
   position: fixed;
   left: 50%;
   transform: translateX(-50%);
-  width: min(406px, calc(100% - 24px));
-  bottom: calc(52px + var(--safe-bot));
-  background: rgba(255,255,255,0.98);
+  width: min(406px, calc(100% - 16px));
+  bottom: calc(6px + var(--safe-bot));
+  z-index: 8;
+  background: #fff;
   border: 1px solid var(--line);
-  border-radius: 22px;
-  height: 58px;
+  border-radius: 20px 20px 22px 22px;
+  box-shadow: 0 -6px 28px rgba(15, 23, 42, 0.1);
+  padding: 8px 8px 10px;
+}
+.bottom-dock::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: #fff;
+  z-index: -1;
+}
+.dock-main {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  padding: 6px;
-  z-index: 6;
+  gap: 4px;
 }
 .tabs.tabs-4 { grid-template-columns: repeat(4, 1fr); }
 .tabs.tabs-5 { grid-template-columns: repeat(5, 1fr); }
 .tab {
   border: 0;
   background: transparent;
-  border-radius: 16px;
+  border-radius: 14px;
   font-family: inherit;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 650;
   color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-height: 52px;
+  padding: 6px 2px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
-.tabs-4 .tab { font-size: 10px; padding: 0 2px; }
+.dock-ico {
+  font-size: 15px;
+  line-height: 1;
+  opacity: 0.55;
+}
+.tab.on .dock-ico { opacity: 1; color: var(--teal-2); }
+.dock-lbl {
+  line-height: 1.15;
+  white-space: nowrap;
+}
+.tabs-4 .tab { font-size: 10px; }
 .tabs-5 .tab { font-size: 9px; padding: 0 1px; }
 .cat-item {
   display: flex;
@@ -192,28 +222,50 @@ body {
 .painel-fonte { margin-top: 10px; }
 .painel-period-hint { font-size: 11px; margin-top: 8px; margin-bottom: 4px; }
 .planilha-ref { font-size: 10px; margin: 0 0 8px; opacity: 0.85; }
-.travel-bar {
-  position: fixed;
-  left: 50%;
-  transform: translateX(-50%);
-  width: min(406px, calc(100% - 24px));
-  bottom: calc(4px + var(--safe-bot));
+.dock-travel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #eef2f6;
+}
+.dock-travel-title {
+  flex-shrink: 0;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--violet);
+  width: 52px;
+  text-align: center;
+  line-height: 1.2;
+}
+.dock-travel-btns {
+  flex: 1;
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  z-index: 6;
+  gap: 6px;
 }
+.dock-travel--active .dock-travel-title { color: #5b21b6; }
 .travel-btn {
-  border: 1px solid var(--line);
-  background: #fff;
-  border-radius: 14px;
-  padding: 10px 8px;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  border-radius: 12px;
+  padding: 9px 6px;
   font-family: inherit;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 650;
   color: var(--muted);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
-.travel-btn.on { background: #ede9fe; color: #5b21b6; border-color: #c4b5fd; }
+.travel-btn.on {
+  background: #ede9fe;
+  color: #5b21b6;
+  border-color: #c4b5fd;
+  font-weight: 700;
+}
 .painel-viagem-pick { margin-top: 8px; }
 .painel-viagem-pick select {
   border: 1px solid var(--line);
@@ -468,7 +520,7 @@ body {
 .fab {
   position: fixed;
   right: max(22px, calc(50% - 215px + 22px));
-  bottom: calc(130px + var(--safe-bot));
+  bottom: calc(132px + var(--safe-bot));
   width: 54px; height: 54px;
   border: 0;
   border-radius: 18px;
@@ -672,7 +724,7 @@ body {
   left: 50%;
   transform: translateX(-50%);
   width: min(382px, calc(100% - 48px));
-  bottom: calc(86px + var(--safe-bot));
+  bottom: calc(132px + var(--safe-bot));
   background: var(--ink); color: #fff; border-radius: 14px;
   padding: 12px 14px; font-size: 13px; font-weight: 600; z-index: 12;
   text-align: center; opacity: 0; pointer-events: none; transition: opacity 0.2s;
