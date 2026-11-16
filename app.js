@@ -1,4 +1,6 @@
-const APP_VERSION = "58";
+const APP_VERSION = "59";
+const VIAGENS_SHEET = "Viagens";
+const GASTOS_VIAGEM_SHEET = "Gastos Viagem";
 const PAINEL_PERIOD_KEY = "financas-painel-period-v1";
 const INSTALL_HINT_KEY = "financas-install-hint-v11";
 const KEY = "minhas-financas-config";
@@ -352,9 +354,6 @@ const DESP_COL = {
   dtLancamento: 21,
   viagem: 22,
 };
-
-const GASTOS_VIAGEM_SHEET = "Gastos Viagem";
-const VIAGENS_SHEET = "Viagens";
 
 const DATA_PAGAMENTO_HEADERS = new Set([
   "pagamento",
@@ -922,12 +921,12 @@ function parseTables(batch) {
   const d = parseSheet(byRange.Despesas || [], "despesa");
   const ak = parseSheet(byRange.Alasca || [], "despesa");
   const gv = parseSheet(byRange[GASTOS_VIAGEM_SHEET] || [], "despesa");
-  const vi = parseViagensTable(byRange[VAGENS_SHEET] || []);
+  const vi = parseViagensTable(byRange[VIAGENS_SHEET] || []);
   state._despMeta = d;
   state._alaskaMeta = byRange.Alasca && byRange.Alasca.length ? ak : null;
   state._gastosViagemMeta =
     byRange[GASTOS_VIAGEM_SHEET] && byRange[GASTOS_VIAGEM_SHEET].length ? gv : null;
-  state._viagensMeta = byRange[VAGENS_SHEET] && byRange[VAGENS_SHEET].length ? vi : null;
+  state._viagensMeta = byRange[VIAGENS_SHEET] && byRange[VIAGENS_SHEET].length ? vi : null;
   state._recMeta = null;
   state.despesas = d.rows;
   state.alaskaDespesas = ak.rows;
@@ -1039,7 +1038,12 @@ async function refresh() {
         sheetRange(GASTOS_VIAGEM_SHEET, "A1:W400"),
       ]);
       data.valueRanges = data.valueRanges.concat(viagemBatch.valueRanges);
-    } catch (_) {}
+    } catch (_) {
+      state._viagensMeta = null;
+      state._gastosViagemMeta = null;
+      state.viagens = [];
+      state.gastosViagem = [];
+    }
     parseTables(data);
     syncPainelPeriodDefaults();
     state.fluxoDias = [];
