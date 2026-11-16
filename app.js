@@ -1,4 +1,4 @@
-const APP_VERSION = "57";
+const APP_VERSION = "58";
 const PAINEL_PERIOD_KEY = "financas-painel-period-v1";
 const INSTALL_HINT_KEY = "financas-install-hint-v11";
 const KEY = "minhas-financas-config";
@@ -31,6 +31,9 @@ const state = {
   mesEnd: "",
   despesas: [],
   alaskaDespesas: [],
+  viagens: [],
+  gastosViagem: [],
+  painelViagem: "",
   receitas: [],
   categorias: [],
   painelDe: "",
@@ -57,6 +60,9 @@ const state = {
   categoriaSheetOpen: false,
   categoriaEditingRow: null,
   categoriaForm: { nome: "", limite: "", vinculo: "despesas" },
+  viagemSheetOpen: false,
+  viagemEditingRow: null,
+  viagemCadastroForm: { nome: "", inicio: "", fim: "", previsto: "" },
   form: blankForm(),
 };
 
@@ -89,6 +95,7 @@ function blankForm(kind = "despesa") {
     recorrente: "Não",
     parcela: "",
     observacoes: "",
+    viagem: "",
   };
 }
 
@@ -343,7 +350,11 @@ const DESP_COL = {
   parcela: 19,
   observacoes: 20,
   dtLancamento: 21,
+  viagem: 22,
 };
+
+const GASTOS_VIAGEM_SHEET = "Gastos Viagem";
+const VIAGENS_SHEET = "Viagens";
 
 const DATA_PAGAMENTO_HEADERS = new Set([
   "pagamento",
@@ -373,6 +384,7 @@ function isDtLancamentoHeader(k) {
 
 function despColIdx(idx, field) {
   if (field === "dataPagamento") return DESP_COL.dataPagamento;
+  if (field === "viagem") return idx?.viagem != null ? idx.viagem : DESP_COL.viagem;
   if (idx?.[field] != null) return idx[field];
   return DESP_COL[field] ?? null;
 }
@@ -401,6 +413,7 @@ function mapHeaders(row) {
     recorrente: ["recorrente"],
     parcela: ["parcela"],
     observacoes: ["observações", "observacoes"],
+    viagem: ["viagem"],
     classe: ["classe", "classe (50-30-20)", "classe 50-30-20"],
     limite: ["limite", "orçamento mensal", "orcamento mensal"],
     restante: ["restante"],
@@ -435,6 +448,7 @@ function mapHeaders(row) {
   idx.dataPagamento = DESP_COL.dataPagamento;
   if (idx.tipoPgto == null) idx.tipoPgto = DESP_COL.tipoPgto;
   if (idx.dtLancamento == null) idx.dtLancamento = DESP_COL.dtLancamento;
+  if (idx.viagem == null) idx.viagem = DESP_COL.viagem;
   return idx;
 }
 
@@ -723,6 +737,36 @@ function hydrateOrcamentoMeta() {
   }));
 }
 
+function parseViagensTable(values) {
+  let headerRow = 0;
+  for (let i = 0; i < Math.min(values.length, 12); i++) {
+    const joined = (values[i] || []).map((x) => String(x || "")).join(" ").toLowerCase();
+    if (joined.includes("viagem") && (joined.includes("início") || joined.includes("inicio"))) {
+      headerRow = i;
+      break;
+    }
+  }
+  const rows = [];
+  for (let i = headerRow + 1; i < values.length; i++) {
+    const r = values[i] || [];
+    const nome = String(r[0] || "").trim();
+    if (!nome) continue;
+    rows.push({
+      sheetRow: i + 1,
+      nome,
+      inicio: serialToISO(r[1]),
+      fim: serialToISO(r[2]),
+      previsto: num(r[3]),
+      realizado: num(r[4]),
+    });
+  }
+  return { headerRow, rows };
+}
+
+function viagensNomes() {
+  return state.viagens.map((v) => v.nome).filter(Boolean);
+}
+
 function parseTables(batch) {
   const byRange = {};
   (batch.valueRanges || []).forEach((vr) => {
@@ -861,6 +905,7 @@ function parseTables(batch) {
         dataRecebimento: serialToISO(r[idx.dataRecebimento]),
         tipoPgto: String(r[idx.tipoPgto] ?? r[idx.formaPagamento] ?? r[16] ?? ""),
         dtLancamento: String(r[idx.dtLancamento] ?? r[21] ?? ""),
+        viagem: String(r[idx.viagem] ?? r[22] ?? "").trim(),
         conta: String(r[idx.conta] || ""),
         recorrente: String(r[idx.recorrente] || "Não"),
         parcela: String(r[idx.parcela] || ""),
@@ -876,11 +921,18 @@ function parseTables(batch) {
 
   const d = parseSheet(byRange.Despesas || [], "despesa");
   const ak = parseSheet(byRange.Alasca || [], "despesa");
+  const gv = parseSheet(byRange[GASTOS_VIAGEM_SHEET] || [], "despesa");
+  const vi = parseViagensTable(byRange[VAGENS_SHEET] || []);
   state._despMeta = d;
   state._alaskaMeta = byRange.Alasca && byRange.Alasca.length ? ak : null;
+  state._gastosViagemMeta =
+    byRange[GASTOS_VIAGEM_SHEET] && byRange[GASTOS_VIAGEM_SHEET].length ? gv : null;
+  state._viagensMeta = byRange[VAGENS_SHEET] && byRange[VAGENS_SHEET].length ? vi : null;
   state._recMeta = null;
   state.despesas = d.rows;
   state.alaskaDespesas = ak.rows;
+  state.gastosViagem = gv.rows;
+  state.viagens = vi.rows;
   state.receitas = [];
   state.orcamento = state.categorias.map((c) => ({
     categoria: c.categoria,
@@ -981,6 +1033,13 @@ async function refresh() {
       const alaska = await batchGetRanges([sheetRange("Alasca", "A1:U400")]);
       data.valueRanges = data.valueRanges.concat(alaska.valueRanges);
     } catch (_) {}
+    try {
+      const viagemBatch = await batchGetRanges([
+        sheetRange(VIAGENS_SHEET, "A1:E120"),
+        sheetRange(GASTOS_VIAGEM_SHEET, "A1:W400"),
+      ]);
+      data.valueRanges = data.valueRanges.concat(viagemBatch.valueRanges);
+    } catch (_) {}
     parseTables(data);
     syncPainelPeriodDefaults();
     state.fluxoDias = [];
@@ -1014,12 +1073,19 @@ function monthAlaska() {
   return state.alaskaDespesas.filter((d) => inWorkMonth(d));
 }
 
+function monthGastosViagem() {
+  return state.gastosViagem.filter((d) => inWorkMonth(d));
+}
+
 function expenseRows(kind) {
-  return kind === "alasca" ? state.alaskaDespesas : state.despesas;
+  if (kind === "alasca") return state.alaskaDespesas;
+  if (kind === "viagem") return state.gastosViagem;
+  return state.despesas;
 }
 
 function sheetTitleForKind(kind) {
   if (kind === "alasca") return "Alasca";
+  if (kind === "gastoviagem") return GASTOS_VIAGEM_SHEET;
   if (kind === "receita") return "Receitas";
   return "Despesas";
 }
@@ -1031,14 +1097,20 @@ function loadPainelPeriodFromStore() {
     const o = JSON.parse(raw);
     if (o.painelDe) state.painelDe = o.painelDe;
     if (o.painelAte) state.painelAte = o.painelAte;
-    if (o.painelFonte === "alasca" || o.painelFonte === "despesas") state.painelFonte = o.painelFonte;
+    if (["alasca", "despesas", "viagem"].includes(o.painelFonte)) state.painelFonte = o.painelFonte;
+    if (o.painelViagem) state.painelViagem = o.painelViagem;
   } catch (_) {}
 }
 
 function savePainelPeriodToStore() {
   localStorage.setItem(
     PAINEL_PERIOD_KEY,
-    JSON.stringify({ painelDe: state.painelDe, painelAte: state.painelAte, painelFonte: state.painelFonte })
+    JSON.stringify({
+      painelDe: state.painelDe,
+      painelAte: state.painelAte,
+      painelFonte: state.painelFonte,
+      painelViagem: state.painelViagem,
+    })
   );
 }
 
@@ -1067,7 +1139,12 @@ function expenseInPainelPeriod(d) {
 }
 
 function despesasInPainelPeriod(kind = state.painelFonte) {
-  return expenseRows(kind).filter(expenseInPainelPeriod);
+  let list = expenseRows(kind).filter(expenseInPainelPeriod);
+  if (kind === "viagem" && state.painelViagem) {
+    const v = state.painelViagem;
+    list = list.filter((d) => String(d.viagem || "").trim() === v);
+  }
+  return list;
 }
 
 function monthReceitas() {
@@ -1135,13 +1212,24 @@ function despesasPagasTotal(list) {
 
 function metrics() {
   const ds = despesasInPainelPeriod(state.painelFonte);
-  const previsto = ds.reduce((a, x) => a + x.previsto, 0);
+  let previsto = ds.reduce((a, x) => a + x.previsto, 0);
+  if (state.painelFonte === "viagem" && state.painelViagem) {
+    const v = state.viagens.find((x) => x.nome === state.painelViagem);
+    if (v?.previsto) previsto = v.previsto;
+  } else if (state.painelFonte === "viagem") {
+    previsto = state.viagens.reduce((a, x) => a + (x.previsto || 0), 0);
+  }
   const realizado = despesasPagasTotal(ds);
   const pagar = ds.filter((x) => !x.pago).reduce((a, x) => a + x.previsto, 0);
   const atrasadas = ds.filter((x) => String(x.status).toLowerCase().includes("atras")).length;
   const breve = ds.filter((x) => String(x.status).toLowerCase().includes("breve")).length;
   const limite = state.categorias
-    .filter((x) => normalizeCatVinculo(x.vinculo) === (state.painelFonte === "alasca" ? "alasca" : "despesas"))
+    .filter((x) => {
+      if (state.painelFonte === "viagem") return false;
+      return (
+        normalizeCatVinculo(x.vinculo) === (state.painelFonte === "alasca" ? "alasca" : "despesas")
+      );
+    })
     .reduce((a, x) => a + (x.limite || 0), 0);
   return {
     previsto,
@@ -1162,7 +1250,12 @@ function despValor(d) {
 }
 
 function filteredDespesasBase(kind = "despesa") {
-  let list = kind === "alasca" ? monthAlaska() : monthDespesas();
+  let list =
+    kind === "alasca"
+      ? monthAlaska()
+      : kind === "gastoviagem"
+        ? monthGastosViagem()
+        : monthDespesas();
   if (state.catFilter) {
     const nk = normCat(state.catFilter);
     list = list.filter((d) => normCat(d.categoria) === nk);
@@ -1588,7 +1681,8 @@ function despSubline(d) {
     if (pg) parts.push(`pgto ${isoToBRShort(pg)}`);
   }
   if (!parts.length && d.tipo) parts.push(esc(d.tipo));
-  return `${esc(d.categoria)}${parts.length ? " · " + parts.join(" · ") : ""}`;
+  const head = d.viagem ? `${esc(d.viagem)} · ${esc(d.categoria)}` : esc(d.categoria);
+  return `${head}${parts.length ? " · " + parts.join(" · ") : ""}`;
 }
 
 function isValueQuery(q) {
@@ -1638,6 +1732,10 @@ function sortedAlaska() {
   return sortedExpenseList("alasca");
 }
 
+function sortedGastosViagem() {
+  return sortedExpenseList("gastoviagem");
+}
+
 function sortedExpenseList(kind) {
   let list = filteredDespesasBase(kind);
   const q = state.query.trim();
@@ -1647,7 +1745,8 @@ function sortedExpenseList(kind) {
     list = list.filter(
       (d) =>
         String(d.descricao).toLowerCase().includes(ql) ||
-        String(d.categoria).toLowerCase().includes(ql)
+        String(d.categoria).toLowerCase().includes(ql) ||
+        String(d.viagem || "").toLowerCase().includes(ql)
     );
   }
 
@@ -1816,6 +1915,14 @@ function tabs() {
     </nav>`;
 }
 
+function travelBar() {
+  return `
+    <div class="travel-bar">
+      <button type="button" class="travel-btn ${state.tab === "viagens" ? "on" : ""}" data-tab="viagens">Minhas Viagens</button>
+      <button type="button" class="travel-btn ${state.tab === "gastosviagem" ? "on" : ""}" data-tab="gastosviagem">Gastos na Viagem</button>
+    </div>`;
+}
+
 function firstEmptyCategoriaRow() {
   const start = (state._catMeta?.headerRow ?? 3) + 2;
   const used = new Set(state.categorias.map((c) => c.sheetRow));
@@ -1843,6 +1950,79 @@ function openNewCategoria() {
   state.categoriaForm = { nome: "", limite: "", vinculo: "despesas" };
   state.categoriaSheetOpen = true;
   render();
+}
+
+function firstEmptyViagemRow() {
+  const used = new Set(state.viagens.map((v) => v.sheetRow));
+  const start = (state._viagensMeta?.headerRow ?? 3) + 2;
+  for (let r = start; r < start + 80; r++) {
+    if (!used.has(r)) return r;
+  }
+  return start + state.viagens.length;
+}
+
+function openViagemEdit(sheetRow) {
+  const v = state.viagens.find((x) => x.sheetRow === sheetRow);
+  if (!v) return;
+  state.viagemEditingRow = sheetRow;
+  state.viagemCadastroForm = {
+    nome: v.nome,
+    inicio: v.inicio || "",
+    fim: v.fim || "",
+    previsto: fmtMoneyInput(v.previsto),
+  };
+  state.viagemSheetOpen = true;
+  render();
+}
+
+function openNewViagem() {
+  state.viagemEditingRow = null;
+  state.viagemCadastroForm = { nome: "", inicio: todayISO(), fim: todayISO(), previsto: "" };
+  state.viagemSheetOpen = true;
+  render();
+}
+
+async function saveViagemCadastro() {
+  const nome = String(state.viagemCadastroForm.nome || "").trim();
+  if (!nome) {
+    showToast("Informe o nome da viagem.");
+    return;
+  }
+  const row = state.viagemEditingRow || firstEmptyViagemRow();
+  state.loading = true;
+  state.viagemSheetOpen = false;
+  render();
+  try {
+    try {
+      await getViagensSheetId();
+    } catch {
+      showToast('Crie a aba Viagens (Finanças → Criar abas Viagens + Gastos Viagem).');
+      return;
+    }
+    const prev = num(state.viagemCadastroForm.previsto);
+    await api("/values:batchUpdate?valueInputOption=USER_ENTERED", {
+      method: "POST",
+      body: JSON.stringify({
+        valueInputOption: "USER_ENTERED",
+        data: [
+          { range: sheetRange(VIAGENS_SHEET, `A${row}`), values: [[nome]] },
+          { range: sheetRange(VIAGENS_SHEET, `B${row}`), values: [[isoToBR(state.viagemCadastroForm.inicio)]] },
+          { range: sheetRange(VIAGENS_SHEET, `C${row}`), values: [[isoToBR(state.viagemCadastroForm.fim)]] },
+          { range: sheetRange(VIAGENS_SHEET, `D${row}`), values: [[prev]] },
+        ],
+      }),
+    });
+    showToast(state.viagemEditingRow ? "Viagem atualizada." : "Viagem cadastrada.");
+    state.viagemEditingRow = null;
+    await refresh();
+  } catch (err) {
+    state.error = err.message;
+    showToast(err.message);
+    render();
+  } finally {
+    state.loading = false;
+    render();
+  }
 }
 
 async function saveCategoriaSheet() {
@@ -1945,9 +2125,70 @@ function alascaView() {
   });
 }
 
+function gastosViagemView() {
+  return expenseTabView({
+    kind: "gastoviagem",
+    subtitle: "Lançamentos ligados a uma viagem",
+    title: "Gastos na viagem",
+    fabId: "fabGastoViagem",
+    scrollId: "gastosViagemScroll",
+    emptyMsg: "Nenhum gasto de viagem neste mês. Cadastre uma viagem e toque no +.",
+  });
+}
+
+function minhasViagensView() {
+  const rows = state.viagens
+    .slice()
+    .sort((a, b) => String(b.inicio || "").localeCompare(String(a.inicio || "")))
+    .map(
+      (v) => `
+      <button type="button" class="cat-item" data-viagem-row="${v.sheetRow}">
+        <span>
+          <b>${esc(v.nome)}</b>
+          <small>${isoToBRShort(v.inicio) || "—"} a ${isoToBRShort(v.fim) || "—"} · previsto ${brl(v.previsto)}</small>
+        </span>
+        <span class="cat-amt">${brl(v.realizado)}</span>
+      </button>`
+    )
+    .join("");
+  return `
+    <div class="scroll">
+      <div class="hello">Cadastro de viagens</div>
+      <div class="title">Minhas Viagens</div>
+      <p class="muted" style="font-size:12px;margin-top:6px">Defina nome, período e gasto previsto. Os lançamentos ficam em Gastos na Viagem.</p>
+      <button type="button" class="save" id="btnNovaViagem" style="margin-top:14px">Nova viagem</button>
+      ${rows || `<div class="empty" style="margin-top:16px">Nenhuma viagem cadastrada.</div>`}
+    </div>`;
+}
+
+function viagemCadastroSheetView() {
+  if (!state.viagemSheetOpen) return "";
+  const f = state.viagemCadastroForm;
+  return `
+    <div class="sheet open" id="viagemSheet">
+      <div class="sheet-head">
+        <h2>${state.viagemEditingRow ? "Editar viagem" : "Nova viagem"}</h2>
+        <div class="sheet-head-actions">
+          <button type="button" class="ghost" id="closeViagemSheet" aria-label="Fechar">×</button>
+        </div>
+      </div>
+      <div class="sheet-body">
+        <div class="field"><label>Nome da viagem</label><input id="fViagemNome" value="${esc(f.nome)}" autocomplete="off" /></div>
+        <div class="row2">
+          <div class="field"><label>Data inicial</label><input id="fViagemIni" type="date" value="${esc(f.inicio)}" /></div>
+          <div class="field"><label>Data final</label><input id="fViagemFim" type="date" value="${esc(f.fim)}" /></div>
+        </div>
+        <div class="field"><label>Gasto total previsto (R$)</label><input id="fViagemPrev" inputmode="decimal" value="${esc(f.previsto)}" placeholder="0,00" /></div>
+      </div>
+      <button class="save" id="saveViagemBtn">${state.loading ? "Salvando…" : "Salvar na planilha"}</button>
+    </div>`;
+}
+
 function expenseTabView({ kind, subtitle, title, fabId, scrollId, emptyMsg }) {
   const hit = state.searchHitRow;
-  const list = (kind === "alasca" ? sortedAlaska() : sortedDespesas())
+  const sorted =
+    kind === "alasca" ? sortedAlaska() : kind === "gastoviagem" ? sortedGastosViagem() : sortedDespesas();
+  const list = sorted
     .map(
       (d) => `
       <div class="item${d.sheetRow === hit ? " search-hit" : ""}" data-row="${d.sheetRow}" data-kind="${kind}" role="button" tabindex="0">
@@ -2175,7 +2416,14 @@ function painelCategoriasPieHtml() {
 
 function painelView(m) {
   const { start, end } = painelPeriodBounds();
-  const fonteLbl = m.painelFonte === "alasca" ? "Alasca" : "Despesas";
+  const fonteLbl =
+    m.painelFonte === "alasca" ? "Alasca" : m.painelFonte === "viagem" ? "Viagem" : "Despesas";
+  const viagemOpts = viagensNomes()
+    .map(
+      (n) =>
+        `<option value="${esc(n)}" ${state.painelViagem === n ? "selected" : ""}>${esc(n)}</option>`
+    )
+    .join("");
   return `
     <div class="scroll">
       ${renderInstallHint()}
@@ -2195,8 +2443,17 @@ function painelView(m) {
       <div class="chips painel-fonte">
         <button type="button" class="chip ${state.painelFonte === "despesas" ? "on" : ""}" data-painel-fonte="despesas">Despesas</button>
         <button type="button" class="chip ${state.painelFonte === "alasca" ? "on" : ""}" data-painel-fonte="alasca">Alasca</button>
+        <button type="button" class="chip ${state.painelFonte === "viagem" ? "on" : ""}" data-painel-fonte="viagem">Viagem</button>
       </div>
-      <p class="muted painel-period-hint">Painel: <b>${esc(fonteLbl)}</b> · período selecionado</p>
+      <div class="painel-viagem-pick ${state.painelFonte === "viagem" ? "" : "hidden"}">
+        <label class="period-field" style="flex:1"><span>Viagem</span>
+          <select id="painelViagemSel">
+            <option value="">Todas as viagens</option>
+            ${viagemOpts}
+          </select>
+        </label>
+      </div>
+      <p class="muted painel-period-hint">Painel: <b>${esc(fonteLbl)}</b>${state.painelFonte === "viagem" && state.painelViagem ? ` · ${esc(state.painelViagem)}` : ""} · período selecionado</p>
       ${planilhaRefHint()}
       <div class="grid2">
         <div class="kpi"><span>PREVISTO</span><b>${brl(m.previsto)}</b><small class="kpi-hint">no período</small></div>
@@ -2355,6 +2612,8 @@ function sheetView() {
   const L = state.listas;
   const isRec = state.sheetKind === "receita";
   const isAlaska = state.sheetKind === "alasca";
+  const isGastoViagem = state.sheetKind === "gastoviagem";
+  const viagemOpts = viagensNomes();
   const catOpts = isAlaska
     ? L.categoriasAlasca?.length
       ? L.categoriasAlasca
@@ -2384,6 +2643,14 @@ function sheetView() {
     : `
         <div class="field"><label>Descrição</label><input id="fDesc" value="${esc(f.descricao)}" placeholder="Ex.: IPTU casa da praia" /></div>
         <div class="field"><label>Categoria</label><select id="fCat">${options(catOpts, f.categoria)}</select></div>
+        ${
+          isGastoViagem
+            ? `<div class="field"><label>Viagem</label><select id="fViagem">${options(
+                viagemOpts.length ? viagemOpts : [f.viagem || ""].filter(Boolean),
+                f.viagem || state.painelViagem || viagemOpts[0] || ""
+              )}</select></div>`
+            : ""
+        }
         <div class="row2">
           <div class="field"><label>Previsto</label><input id="fPrev" inputmode="decimal" value="${esc(f.previsto)}" placeholder="0,00" /></div>
           <div class="field"><label>Vencimento</label><input id="fVenc" type="date" value="${esc(f.vencimento)}" /></div>
@@ -2414,7 +2681,10 @@ function sheetView() {
           <div class="field"><label>Parcela</label><input id="fParc" value="${esc(f.parcela)}" placeholder="Ex.: 3/12" /></div>
           <div class="field"><label>Observações</label><input id="fObs" value="${esc(f.observacoes)}" placeholder="Opcional" /></div>
         </div>`;
-  const editingDesp = !isRec && state.editingRow && (state.sheetKind === "despesa" || state.sheetKind === "alasca");
+  const editingDesp =
+    !isRec &&
+    state.editingRow &&
+    (state.sheetKind === "despesa" || state.sheetKind === "alasca" || state.sheetKind === "gastoviagem");
   const deleteOverlay =
     state.deleteConfirm && editingDesp
       ? `
@@ -2432,7 +2702,23 @@ function sheetView() {
   return `
     <div class="sheet ${state.sheetOpen ? "open" : ""}" id="sheet">
       <div class="sheet-head">
-        <h2>${state.editingRow ? (isRec ? "Editar receita" : isAlaska ? "Editar Alasca" : "Editar despesa") : isRec ? "Nova receita" : isAlaska ? "Novo lançamento Alasca" : "Nova despesa"}</h2>
+        <h2>${
+          state.editingRow
+            ? isRec
+              ? "Editar receita"
+              : isGastoViagem
+                ? "Editar gasto na viagem"
+                : isAlaska
+                  ? "Editar Alasca"
+                  : "Editar despesa"
+            : isRec
+              ? "Nova receita"
+              : isGastoViagem
+                ? "Novo gasto na viagem"
+                : isAlaska
+                  ? "Novo lançamento Alasca"
+                  : "Nova despesa"
+        }</h2>
         <div class="sheet-head-actions">
           ${editingDesp ? `<button type="button" class="sheet-del" id="btnDeleteDesp" aria-label="Excluir despesa"><span>🗑</span></button>` : ""}
           <button type="button" class="ghost" id="closeSheet" aria-label="Fechar">×</button>
@@ -2451,9 +2737,11 @@ function appView() {
   else if (state.tab === "despesas") body = despesasView();
   else if (state.tab === "categorias") body = categoriasView();
   else if (state.tab === "alasca") body = alascaView();
+  else if (state.tab === "viagens") body = minhasViagensView();
+  else if (state.tab === "gastosviagem") body = gastosViagemView();
   else body = painelView(m);
   const orc = state.orcamentoOpen ? orcamentoOverlay(m) : "";
-  return `<div class="app ${state.loading ? "busy" : ""}">${body}${tabs()}${orc}${categoriaSheetView()}${sheetView()}
+  return `<div class="app ${state.loading ? "busy" : ""}">${body}${tabs()}${travelBar()}${orc}${categoriaSheetView()}${viagemCadastroSheetView()}${sheetView()}
     <div class="toast ${state.toast ? "show" : ""}">${esc(state.toast)}</div></div>`;
 }
 
@@ -2507,6 +2795,7 @@ function readFormFromDom() {
   if ($("fPgto")) state.form.dataPagamento = $("fPgto").value;
   if ($("fTipoPgto")) state.form.tipoPgto = $("fTipoPgto").value;
   if ($("fRecb")) state.form.dataRecebimento = $("fRecb").value;
+  if ($("fViagem")) state.form.viagem = $("fViagem").value;
   if ($("fCat")) {
     state.form.categoria = $("fCat").value;
     state.form.tipo = $("fTipo").value;
@@ -2523,11 +2812,19 @@ function openNew(kind = "despesa") {
   state.moreOpen = false;
   state.sheetKind = kind;
   state.form = blankForm(kind);
-  if (kind === "despesa" || kind === "alasca") {
-    const opts = kind === "alasca" ? state.listas.categoriasAlasca : state.listas.categoriasDespesas;
+  if (kind === "despesa" || kind === "alasca" || kind === "gastoviagem") {
+    const opts =
+      kind === "alasca"
+        ? state.listas.categoriasAlasca
+        : kind === "gastoviagem"
+          ? state.listas.categoriasDespesas
+          : state.listas.categoriasDespesas;
     const fallback = state.listas.categorias;
     const pick = (opts && opts[0]) || (fallback && fallback[0]);
     if (pick) state.form.categoria = pick;
+    if (kind === "gastoviagem") {
+      state.form.viagem = state.painelViagem || viagensNomes()[0] || "";
+    }
   }
   if (kind === "receita" && state.listas.fontes[0]) state.form.fonte = state.listas.fontes[0];
   state.sheetOpen = true;
@@ -2536,7 +2833,13 @@ function openNew(kind = "despesa") {
 
 function openEdit(row, kind = "despesa") {
   const list =
-    kind === "receita" ? state.receitas : kind === "alasca" ? state.alaskaDespesas : state.despesas;
+    kind === "receita"
+      ? state.receitas
+      : kind === "alasca"
+        ? state.alaskaDespesas
+        : kind === "gastoviagem"
+          ? state.gastosViagem
+          : state.despesas;
   const d = list.find((x) => x.sheetRow === row);
   if (!d) return;
   state.editingRow = row;
@@ -2570,6 +2873,7 @@ function openEdit(row, kind = "despesa") {
       recorrente: d.recorrente || "Não",
       parcela: d.parcela,
       observacoes: d.observacoes,
+      viagem: d.viagem || "",
     };
   }
   state.sheetOpen = true;
@@ -2590,11 +2894,24 @@ async function saveSheet() {
   const f = state.form;
   const isRec = state.sheetKind === "receita";
   const isAlaska = state.sheetKind === "alasca";
+  const isGastoViagem = state.sheetKind === "gastoviagem";
   if (isAlaska) {
     try {
       await getAlaskaSheetId();
     } catch {
       showToast("Aba Alasca não existe. Na planilha: Finanças → Configurar → Criar aba Alasca.");
+      return;
+    }
+  }
+  if (isGastoViagem) {
+    if (!String(f.viagem || "").trim()) {
+      showToast("Selecione a viagem.");
+      return;
+    }
+    try {
+      await getGastosViagemSheetId();
+    } catch {
+      showToast("Aba Gastos Viagem não encontrada. Finanças → Criar abas Viagens.");
       return;
     }
   }
@@ -2626,17 +2943,36 @@ async function saveSheet() {
       }
     }
   }
-  const idx = (isRec ? state._recMeta : isAlaska ? state._alaskaMeta : state._despMeta)?.idx || {};
-  const sheet = sheetTitleForKind(isAlaska ? "alasca" : isRec ? "receita" : "despesa");
+  const idx = (isRec
+    ? state._recMeta
+    : isGastoViagem
+      ? state._gastosViagemMeta
+      : isAlaska
+        ? state._alaskaMeta
+        : state._despMeta)?.idx || {};
+  const sheet = sheetTitleForKind(
+    isGastoViagem ? "gastoviagem" : isAlaska ? "alasca" : isRec ? "receita" : "despesa"
+  );
   const meta = isRec
     ? state._recMeta
-    : isAlaska
-      ? state._alaskaMeta || {
+    : isGastoViagem
+      ? state._gastosViagemMeta || {
           headerRow: state._despMeta?.headerRow ?? 3,
           idx: state._despMeta?.idx || {},
         }
-      : state._despMeta;
-  const rows = isRec ? state.receitas : isAlaska ? state.alaskaDespesas : state.despesas;
+      : isAlaska
+        ? state._alaskaMeta || {
+            headerRow: state._despMeta?.headerRow ?? 3,
+            idx: state._despMeta?.idx || {},
+          }
+        : state._despMeta;
+  const rows = isRec
+    ? state.receitas
+    : isGastoViagem
+      ? state.gastosViagem
+      : isAlaska
+        ? state.alaskaDespesas
+        : state.despesas;
   const row = state.editingRow || firstEmptyRow(meta, rows);
   const competencia = `${state.ano}-${String(state.mesNum).padStart(2, "0")}-01`;
   const previsto = num(f.previsto);
@@ -2668,8 +3004,9 @@ async function saveSheet() {
         parcela: f.parcela,
         observacoes: f.observacoes,
         tipoPgto: f.tipoPgto || "",
+        viagem: isGastoViagem ? String(f.viagem || "").trim() : "",
       };
-  if (!isRec && (state.sheetKind === "despesa" || state.sheetKind === "alasca")) {
+  if (!isRec && (state.sheetKind === "despesa" || state.sheetKind === "alasca" || state.sheetKind === "gastoviagem")) {
     writes.dataPagamento = f.pago ? isoToBR(despesaDataPagamento(f)) : "";
     if (!state.editingRow) writes.dtLancamento = nowDateTimeBR();
   }
@@ -2678,6 +3015,7 @@ async function saveSheet() {
   }
   const data = [];
   for (const [field, value] of Object.entries(writes)) {
+    if (field === "viagem" && !isGastoViagem) continue;
     const col = isRec ? idx[field] : despColIdx(idx, field);
     if (col == null) continue;
     data.push({
@@ -2711,13 +3049,19 @@ async function saveSheet() {
 async function togglePago(row, ev, kind = "despesa") {
   ev.stopPropagation();
   const list =
-    kind === "receita" ? state.receitas : kind === "alasca" ? state.alaskaDespesas : state.despesas;
+    kind === "receita"
+      ? state.receitas
+      : kind === "alasca"
+        ? state.alaskaDespesas
+        : kind === "gastoviagem"
+          ? state.gastosViagem
+          : state.despesas;
   const sheet = sheetTitleForKind(kind);
   const d = list.find((x) => x.sheetRow === row);
   if (!d || d.idx?.pago == null) return;
   const next = !d.pago;
   if (next) {
-    if (kind === "despesa" || kind === "alasca") {
+    if (kind === "despesa" || kind === "alasca" || kind === "gastoviagem") {
       const dt = despesaDataPagamento(d);
       if (!dt) {
         showToast("Informe o vencimento antes de marcar como pago.");
@@ -2749,7 +3093,7 @@ async function togglePago(row, ev, kind = "despesa") {
       kind === "receita" ? d.idx.realizado : despColIdx(d.idx, "realizado");
     data.push({ range: sheetRange(sheet, `${colLetter(realCol)}${row}`), values: [[d.previsto]] });
   }
-  if (kind === "despesa" || kind === "alasca") {
+  if (kind === "despesa" || kind === "alasca" || kind === "gastoviagem") {
     const pgtoCol = despColIdx(d.idx, "dataPagamento");
     if (next) {
       const pgto = despesaDataPagamento(d);
@@ -2797,9 +3141,27 @@ async function getAlaskaSheetId() {
   return getSheetIdByTitle("Alasca", "_alaskaSheetId");
 }
 
+async function getViagensSheetId() {
+  return getSheetIdByTitle(VIAGENS_SHEET, "_viagensSheetId");
+}
+
+async function getGastosViagemSheetId() {
+  return getSheetIdByTitle(GASTOS_VIAGEM_SHEET, "_gastosViagemSheetId");
+}
+
 function openDeleteConfirm(row) {
-  const kind = state.sheetKind === "alasca" ? "alasca" : "despesa";
-  const list = kind === "alasca" ? state.alaskaDespesas : state.despesas;
+  const kind =
+    state.sheetKind === "alasca"
+      ? "alasca"
+      : state.sheetKind === "gastoviagem"
+        ? "gastoviagem"
+        : "despesa";
+  const list =
+    kind === "alasca"
+      ? state.alaskaDespesas
+      : kind === "gastoviagem"
+        ? state.gastosViagem
+        : state.despesas;
   const d = list.find((x) => x.sheetRow === row);
   if (!d) return;
   state.deleteConfirm = { row, kind, descricao: d.descricao || "(sem descrição)" };
@@ -2813,7 +3175,11 @@ function closeDeleteConfirm() {
 
 async function deleteExpense(row, kind = "despesa") {
   const sheetId =
-    kind === "alasca" ? await getAlaskaSheetId() : await getDespesasSheetId();
+    kind === "alasca"
+      ? await getAlaskaSheetId()
+      : kind === "gastoviagem"
+        ? await getGastosViagemSheetId()
+        : await getDespesasSheetId();
   state.loading = true;
   state.deleteConfirm = null;
   state.sheetOpen = false;
@@ -2873,7 +3239,12 @@ function bindRootActions() {
       state.filtro = "todas";
       state.query = "";
       state.searchHitRow = null;
-      state.tab = state.painelFonte === "alasca" ? "alasca" : "despesas";
+      state.tab =
+        state.painelFonte === "alasca"
+          ? "alasca"
+          : state.painelFonte === "viagem"
+            ? "gastosviagem"
+            : "despesas";
       state.sheetOpen = false;
       render();
       return;
@@ -2881,8 +3252,14 @@ function bindRootActions() {
     const painelFonteBtn = e.target.closest("[data-painel-fonte]");
     if (painelFonteBtn) {
       state.painelFonte = painelFonteBtn.dataset.painelFonte;
+      if (state.painelFonte !== "viagem") state.painelViagem = "";
       savePainelPeriodToStore();
       render();
+      return;
+    }
+    const viagemRowBtn = e.target.closest("[data-viagem-row]");
+    if (viagemRowBtn) {
+      openViagemEdit(Number(viagemRowBtn.dataset.viagemRow));
       return;
     }
     const clearCatBtn = e.target.closest("[data-clear-cat]");
@@ -2912,6 +3289,7 @@ function bindRootActions() {
       state.sheetOpen = false;
       state.orcamentoOpen = false;
       state.categoriaSheetOpen = false;
+      state.viagemSheetOpen = false;
       state.deleteConfirm = null;
       render();
       return;
@@ -3027,12 +3405,33 @@ function bind() {
   });
   on("fab", "click", () => openNew("despesa"));
   on("fabAlaska", "click", () => openNew("alasca"));
+  on("fabGastoViagem", "click", () => openNew("gastoviagem"));
   on("fabRec", "click", () => openNew("receita"));
+  on("btnNovaViagem", "click", () => openNewViagem());
+  on("closeViagemSheet", "click", () => {
+    state.viagemSheetOpen = false;
+    render();
+  });
+  on("saveViagemBtn", "click", () => {
+    const $ = (id) => document.getElementById(id);
+    if ($("fViagemNome")) state.viagemCadastroForm.nome = $("fViagemNome").value;
+    if ($("fViagemIni")) state.viagemCadastroForm.inicio = $("fViagemIni").value;
+    if ($("fViagemFim")) state.viagemCadastroForm.fim = $("fViagemFim").value;
+    if ($("fViagemPrev")) state.viagemCadastroForm.previsto = $("fViagemPrev").value;
+    saveViagemCadastro();
+  });
+  on("painelViagemSel", "change", (e) => {
+    state.painelViagem = e.target.value || "";
+    savePainelPeriodToStore();
+    render();
+  });
   on("btnPainelPeriod", "click", () => {
     const de = document.getElementById("painelDe");
     const ate = document.getElementById("painelAte");
+    const vs = document.getElementById("painelViagemSel");
     if (de) state.painelDe = de.value;
     if (ate) state.painelAte = ate.value;
+    if (vs) state.painelViagem = vs.value || "";
     savePainelPeriodToStore();
     render();
   });
@@ -3059,7 +3458,10 @@ function bind() {
     }
     state.form.pago = next;
     if (state.form.pago && !state.form.realizado) state.form.realizado = state.form.previsto;
-    if (state.form.pago && (state.sheetKind === "despesa" || state.sheetKind === "alasca")) {
+    if (
+      state.form.pago &&
+      (state.sheetKind === "despesa" || state.sheetKind === "alasca" || state.sheetKind === "gastoviagem")
+    ) {
       syncDespesaDatasPago(state.form);
     }
     render();

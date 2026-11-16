@@ -35,7 +35,7 @@ body {
   box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.06);
 }
 .scroll {
-  padding: calc(18px + var(--safe-top)) 18px calc(132px + var(--safe-bot));
+  padding: calc(18px + var(--safe-top)) 18px calc(178px + var(--safe-bot));
 }
 .hello { font-size: 13px; color: var(--muted); }
 .app-ver {
@@ -97,7 +97,7 @@ body {
   left: 50%;
   transform: translateX(-50%);
   width: min(406px, calc(100% - 24px));
-  bottom: calc(4px + var(--safe-bot));
+  bottom: calc(52px + var(--safe-bot));
   background: rgba(255,255,255,0.98);
   border: 1px solid var(--line);
   border-radius: 22px;
@@ -192,6 +192,38 @@ body {
 .painel-fonte { margin-top: 10px; }
 .painel-period-hint { font-size: 11px; margin-top: 8px; margin-bottom: 4px; }
 .planilha-ref { font-size: 10px; margin: 0 0 8px; opacity: 0.85; }
+.travel-bar {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(406px, calc(100% - 24px));
+  bottom: calc(4px + var(--safe-bot));
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  z-index: 6;
+}
+.travel-btn {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 14px;
+  padding: 10px 8px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--muted);
+}
+.travel-btn.on { background: #ede9fe; color: #5b21b6; border-color: #c4b5fd; }
+.painel-viagem-pick { margin-top: 8px; }
+.painel-viagem-pick select {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 8px;
+  font: inherit;
+  font-size: 13px;
+  background: #fff;
+  width: 100%;
+}
 .flux-hero .sub { font-size: 11px; margin-top: 6px; opacity: 0.9; }
 .flux-row {
   display: block;
@@ -436,7 +468,7 @@ body {
 .fab {
   position: fixed;
   right: max(22px, calc(50% - 215px + 22px));
-  bottom: calc(86px + var(--safe-bot));
+  bottom: calc(130px + var(--safe-bot));
   width: 54px; height: 54px;
   border: 0;
   border-radius: 18px;
