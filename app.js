@@ -1,4 +1,4 @@
-const APP_VERSION = "65";
+const APP_VERSION = "66";
 /** Primeira linha de lançamentos nas abas Despesas / Alasca / Gastos Viagem (cabeçalho na linha 4). */
 const DESP_DATA_START = 5;
 const VIAGENS_SHEET = "Viagens";
