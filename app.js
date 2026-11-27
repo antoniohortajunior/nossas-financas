@@ -1,4 +1,4 @@
-const APP_VERSION = "73";
+const APP_VERSION = "74";
 /** Primeira linha de lançamentos nas abas Despesas / Alasca / Gastos Viagem (cabeçalho na linha 4). */
 const DESP_DATA_START = 5;
 const VIAGENS_SHEET = "Viagens";
@@ -707,32 +707,29 @@ function workMonthBounds() {
   return { start, end };
 }
 
-/** Despesa pertence ao mês de trabalho (competência, vencimento ou pagamento). */
+function ymFromIsoField(iso) {
+  const s = String(iso || "").slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s.slice(0, 7) : "";
+}
+
+/**
+ * Mês de trabalho para listas (Despesas / Alasca).
+ * Prioriza vencimento: na planilha a competência costuma repetir o mês de Config em todas as linhas.
+ */
 function expenseInWorkMonth(d) {
   const want = workMonthKey();
   if (!want) return false;
-  const comp = d.competencia?.slice(0, 10);
-  const venc = d.vencimento?.slice(0, 10);
-  const pgto = d.dataPagamento?.slice(0, 10);
-  if (comp && /^\d{4}-\d{2}-\d{2}$/.test(comp) && comp.slice(0, 7) === want) return true;
-  if (venc && /^\d{4}-\d{2}-\d{2}$/.test(venc) && venc.slice(0, 7) === want) return true;
-  if (pgto && /^\d{4}-\d{2}-\d{2}$/.test(pgto) && pgto.slice(0, 7) === want) return true;
-  const fromTxn = transactionMonthKey(d);
-  if (fromTxn === want) return true;
-  const { start, end } = workMonthBounds();
-  if (start && end) {
-    if (comp && comp >= start && comp <= end) return true;
-    if (venc && venc >= start && venc <= end) return true;
-    if (pgto && pgto >= start && pgto <= end) return true;
+  const vYm = ymFromIsoField(d.vencimento);
+  if (vYm) return vYm === want;
+  const cYm = ymFromIsoField(d.competencia);
+  if (cYm) return cYm === want;
+  if (d.pago) {
+    const pYm = ymFromIsoField(d.dataPagamento);
+    if (pYm) return pYm === want;
   }
-  if (d.competenciaRaw) {
-    const raw = String(d.competenciaRaw).toLowerCase();
-    const mon = MONTHS[state.mesNum - 1]?.toLowerCase();
-    const monShort = mon?.slice(0, 3);
-    if (mon && (raw.includes(mon) || (monShort && raw.includes(monShort))) && raw.includes(String(state.ano)))
-      return true;
-  }
-  return sameMonth(d.competencia, d.vencimento);
+  const rawYm = ym(d.competencia) || cellYM(d.competenciaRaw);
+  if (rawYm) return rawYm === want;
+  return transactionMonthKey(d) === want;
 }
 
 function inWorkMonth(d) {
