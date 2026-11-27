@@ -1,4 +1,4 @@
-const APP_VERSION = "71";
+const APP_VERSION = "73";
 /** Primeira linha de lançamentos nas abas Despesas / Alasca / Gastos Viagem (cabeçalho na linha 4). */
 const DESP_DATA_START = 5;
 const VIAGENS_SHEET = "Viagens";
@@ -67,6 +67,8 @@ const state = {
   viagemSheetOpen: false,
   viagemEditingRow: null,
   viagemCadastroForm: { nome: "", inicio: "", fim: "", previsto: "" },
+  viagemDeleteConfirm: null,
+  alascaShowAll: false,
   form: blankForm(),
 };
 
@@ -684,28 +686,57 @@ function pillClass(status) {
 }
 
 function sameMonth(iso, vencimento) {
-  const want = `${state.ano}-${String(state.mesNum).padStart(2, "0")}`;
+  const want = workMonthKey();
   const got = cellYM(iso) || ym(iso);
   if (got === want) return true;
   if (!got && vencimento) return cellYM(vencimento) === want;
   return false;
 }
 
-function inWorkMonth(d) {
-  const start = state.mesStart?.slice(0, 10);
-  const end = state.mesEnd?.slice(0, 10);
+/** Intervalo do mês de trabalho (Config B9–B10 ou 1º/último dia de B5/B6). */
+function workMonthBounds() {
+  let start = state.mesStart?.slice(0, 10) || "";
+  let end = state.mesEnd?.slice(0, 10) || "";
+  if (start.length === 10 && end.length === 10) return { start, end };
+  const y = Number(state.ano);
+  const m = Number(state.mesNum);
+  if (!y || !m || m < 1 || m > 12) return { start: "", end: "" };
+  start = `${y}-${String(m).padStart(2, "0")}-01`;
+  const ld = new Date(y, m, 0).getDate();
+  end = `${y}-${String(m).padStart(2, "0")}-${String(ld).padStart(2, "0")}`;
+  return { start, end };
+}
+
+/** Despesa pertence ao mês de trabalho (competência, vencimento ou pagamento). */
+function expenseInWorkMonth(d) {
+  const want = workMonthKey();
+  if (!want) return false;
   const comp = d.competencia?.slice(0, 10);
   const venc = d.vencimento?.slice(0, 10);
-  if (start && end && start.length === 10 && end.length === 10) {
+  const pgto = d.dataPagamento?.slice(0, 10);
+  if (comp && /^\d{4}-\d{2}-\d{2}$/.test(comp) && comp.slice(0, 7) === want) return true;
+  if (venc && /^\d{4}-\d{2}-\d{2}$/.test(venc) && venc.slice(0, 7) === want) return true;
+  if (pgto && /^\d{4}-\d{2}-\d{2}$/.test(pgto) && pgto.slice(0, 7) === want) return true;
+  const fromTxn = transactionMonthKey(d);
+  if (fromTxn === want) return true;
+  const { start, end } = workMonthBounds();
+  if (start && end) {
     if (comp && comp >= start && comp <= end) return true;
     if (venc && venc >= start && venc <= end) return true;
+    if (pgto && pgto >= start && pgto <= end) return true;
   }
   if (d.competenciaRaw) {
     const raw = String(d.competenciaRaw).toLowerCase();
-    const mon = MONTHS[state.mesNum - 1]?.slice(0, 3).toLowerCase();
-    if (mon && raw.includes(mon) && raw.includes(String(state.ano))) return true;
+    const mon = MONTHS[state.mesNum - 1]?.toLowerCase();
+    const monShort = mon?.slice(0, 3);
+    if (mon && (raw.includes(mon) || (monShort && raw.includes(monShort))) && raw.includes(String(state.ano)))
+      return true;
   }
   return sameMonth(d.competencia, d.vencimento);
+}
+
+function inWorkMonth(d) {
+  return expenseInWorkMonth(d);
 }
 
 function isSummaryRow(descricao, joined) {
@@ -1179,11 +1210,11 @@ async function refresh() {
 }
 
 function monthDespesas() {
-  return state.despesas.filter((d) => inWorkMonth(d));
+  return state.despesas.filter(expenseInWorkMonth);
 }
 
 function monthAlaska() {
-  return state.alaskaDespesas.filter((d) => inWorkMonth(d));
+  return state.alaskaDespesas.filter(expenseInWorkMonth);
 }
 
 /** Gastos de viagem costumam cair fora do “mês de trabalho” da planilha — lista tudo e filtra só na busca/filtros. */
@@ -1383,7 +1414,9 @@ function despValor(d) {
 function filteredDespesasBase(kind = "despesa") {
   let list =
     kind === "alasca"
-      ? monthAlaska()
+      ? state.alascaShowAll
+        ? state.alaskaDespesas.slice()
+        : monthAlaska()
       : kind === "gastoviagem"
         ? monthGastosViagem()
         : monthDespesas();
@@ -2121,6 +2154,7 @@ function openViagemEdit(sheetRow) {
   const v = state.viagens.find((x) => x.sheetRow === sheetRow);
   if (!v) return;
   state.viagemEditingRow = sheetRow;
+  state.viagemDeleteConfirm = null;
   state.viagemCadastroForm = {
     nome: v.nome,
     inicio: v.inicio || "",
@@ -2134,8 +2168,56 @@ function openViagemEdit(sheetRow) {
 function openNewViagem() {
   state.viagemEditingRow = null;
   state.viagemCadastroForm = { nome: "", inicio: todayISO(), fim: todayISO(), previsto: "" };
+  state.viagemDeleteConfirm = null;
   state.viagemSheetOpen = true;
   render();
+}
+
+function openViagemDeleteConfirm() {
+  if (!state.viagemEditingRow) return;
+  const v = state.viagens.find((x) => x.sheetRow === state.viagemEditingRow);
+  if (!v) return;
+  state.viagemDeleteConfirm = { row: state.viagemEditingRow, nome: v.nome || "(sem nome)" };
+  render();
+}
+
+function closeViagemDeleteConfirm() {
+  state.viagemDeleteConfirm = null;
+  render();
+}
+
+async function deleteViagemRow(row) {
+  state.loading = true;
+  state.viagemDeleteConfirm = null;
+  state.viagemSheetOpen = false;
+  state.viagemEditingRow = null;
+  render();
+  try {
+    const sheetId = await getViagensSheetId();
+    await api(":batchUpdate", {
+      method: "POST",
+      body: JSON.stringify({
+        requests: [
+          {
+            deleteDimension: {
+              range: {
+                sheetId,
+                dimension: "ROWS",
+                startIndex: row - 1,
+                endIndex: row,
+              },
+            },
+          },
+        ],
+      }),
+    });
+    showToast("Viagem excluída. Os gastos em Gastos na viagem permanecem na planilha.");
+    await refresh();
+  } catch (err) {
+    state.loading = false;
+    showToast(err.message);
+    render();
+  }
 }
 
 async function saveViagemCadastro() {
@@ -2271,9 +2353,13 @@ function categoriaSheetView() {
 }
 
 function alascaView() {
+  const sub =
+    state.mes && state.ano
+      ? `Motorhome · ${state.mes} de ${state.ano}`
+      : "Motorhome — manutenção e acessórios";
   return expenseTabView({
     kind: "alasca",
-    subtitle: "Motorhome — manutenção e acessórios",
+    subtitle: sub,
     title: "Alasca",
     fabId: "fabAlaska",
     scrollId: "alaskaScroll",
@@ -2323,11 +2409,26 @@ function minhasViagensView() {
 function viagemCadastroSheetView() {
   if (!state.viagemSheetOpen) return "";
   const f = state.viagemCadastroForm;
+  const deleteOverlay =
+    state.viagemDeleteConfirm && state.viagemEditingRow
+      ? `
+      <div class="sheet-confirm" id="confirmDeleteViagem">
+        <div class="confirm-box">
+          <h3>Excluir viagem?</h3>
+          <p>Deseja excluir <strong>${esc(state.viagemDeleteConfirm.nome)}</strong>? Os lançamentos em Gastos na viagem não são apagados.</p>
+          <div class="confirm-actions">
+            <button type="button" class="confirm-no" id="viagemDeleteNo">Não</button>
+            <button type="button" class="confirm-yes" id="viagemDeleteYes">Sim</button>
+          </div>
+        </div>
+      </div>`
+      : "";
   return `
     <div class="sheet open" id="viagemSheet">
       <div class="sheet-head">
         <h2>${state.viagemEditingRow ? "Editar viagem" : "Nova viagem"}</h2>
         <div class="sheet-head-actions">
+          ${state.viagemEditingRow ? `<button type="button" class="sheet-del" id="btnDeleteViagem" aria-label="Excluir viagem"><span>🗑</span></button>` : ""}
           <button type="button" class="ghost" id="closeViagemSheet" aria-label="Fechar">×</button>
         </div>
       </div>
@@ -2340,6 +2441,7 @@ function viagemCadastroSheetView() {
         <div class="field"><label>Gasto total previsto (R$)</label><input id="fViagemPrev" inputmode="decimal" value="${esc(f.previsto)}" placeholder="0,00" /></div>
       </div>
       <button type="button" class="save" id="saveViagemBtn">${state.loading ? "Salvando…" : "Salvar na planilha"}</button>
+      ${deleteOverlay}
     </div>`;
 }
 
@@ -2375,6 +2477,11 @@ function expenseTabView({ kind, subtitle, title, fabId, scrollId, emptyMsg }) {
         <button type="button" class="chip ${state.filtro === "todas" ? "on" : ""}" data-filtro="todas">Todas</button>
         <button type="button" class="chip ${state.filtro === "pagar" ? "on" : ""}" data-filtro="pagar">A pagar</button>
         <button type="button" class="chip ${state.filtro === "atrasadas" ? "on" : ""}" data-filtro="atrasadas">Atrasadas</button>
+        ${
+          kind === "alasca"
+            ? `<button type="button" class="chip ${state.alascaShowAll ? "on" : ""}" data-alasca-todas-datas>Todas as datas</button>`
+            : ""
+        }
         ${state.catFilter ? `<button type="button" class="chip chip-cat on" data-clear-cat>✕ ${esc(state.catFilter)}</button>` : ""}
       </div>
       ${list || `<div class="empty">${esc(emptyMsg)}</div>`}
@@ -2724,9 +2831,10 @@ function mesView() {
 }
 
 function despesasView() {
+  const sub = state.mes && state.ano ? `Lançamentos de ${state.mes} de ${state.ano}` : "Lançamentos do mês";
   return expenseTabView({
     kind: "despesa",
-    subtitle: "Lançamentos do mês",
+    subtitle: sub,
     title: "Despesas",
     fabId: "fab",
     scrollId: "despScroll",
@@ -3629,6 +3737,30 @@ function bindRootActions() {
     if (e.target.closest("#closeViagemSheet")) {
       e.preventDefault();
       state.viagemSheetOpen = false;
+      state.viagemDeleteConfirm = null;
+      render();
+      return;
+    }
+    if (e.target.closest("#btnDeleteViagem")) {
+      e.preventDefault();
+      e.stopPropagation();
+      openViagemDeleteConfirm();
+      return;
+    }
+    if (e.target.closest("#viagemDeleteNo")) {
+      e.preventDefault();
+      closeViagemDeleteConfirm();
+      return;
+    }
+    if (e.target.closest("#viagemDeleteYes")) {
+      e.preventDefault();
+      if (state.viagemDeleteConfirm?.row) deleteViagemRow(state.viagemDeleteConfirm.row);
+      return;
+    }
+    const alascaAllBtn = e.target.closest("[data-alasca-todas-datas]");
+    if (alascaAllBtn) {
+      e.preventDefault();
+      state.alascaShowAll = !state.alascaShowAll;
       render();
       return;
     }
@@ -3742,6 +3874,7 @@ function bindRootActions() {
       state.categoriaSheetOpen = false;
       state.viagemSheetOpen = false;
       state.deleteConfirm = null;
+      if (tabBtn.dataset.tab !== "alasca") state.alascaShowAll = false;
       render();
       return;
     }
