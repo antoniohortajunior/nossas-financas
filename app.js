@@ -1,4 +1,4 @@
-const APP_VERSION = "66";
+const APP_VERSION = "67";
 /** Primeira linha de lançamentos nas abas Despesas / Alasca / Gastos Viagem (cabeçalho na linha 4). */
 const DESP_DATA_START = 5;
 const VIAGENS_SHEET = "Viagens";
@@ -2017,8 +2017,10 @@ function setupView() {
 }
 
 function bottomDock() {
+  const hideDock =
+    state.sheetOpen || state.viagemSheetOpen || state.categoriaSheetOpen || state.orcamentoOpen;
   return `
-    <footer class="bottom-dock" role="navigation" aria-label="Menu principal">
+    <footer class="bottom-dock${hideDock ? " dock-hidden" : ""}" role="navigation" aria-label="Menu principal">
       <nav class="dock-main tabs-4">
         <button type="button" class="tab ${state.tab === "painel" ? "on" : ""}" data-tab="painel">
           <span class="dock-ico" aria-hidden="true">◈</span><span class="dock-lbl">Painel</span>

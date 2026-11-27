@@ -108,6 +108,11 @@ body {
   box-shadow: 0 -8px 32px rgba(15, 23, 42, 0.12);
   padding: 8px 10px calc(10px + var(--safe-bot));
 }
+.bottom-dock.dock-hidden {
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateX(-50%) translateY(120%);
+}
 .bottom-dock::before {
   content: "";
   position: fixed;
@@ -118,6 +123,9 @@ body {
   background: #fff;
   z-index: 19;
   pointer-events: none;
+}
+.bottom-dock.dock-hidden::before {
+  display: none;
 }
 .dock-main {
   display: grid;
@@ -618,7 +626,7 @@ body {
   transform: translateX(-50%) translateY(104%);
   width: min(430px, 100%);
   background: #f6f8fb;
-  z-index: 10;
+  z-index: 30;
   display: flex;
   flex-direction: column;
   transition: transform 0.32s cubic-bezier(0.22, 1, 0.36, 1);
@@ -801,7 +809,7 @@ body {
   cursor: pointer;
   text-transform: lowercase;
 }
-.sheet.orc-sheet { z-index: 8; }
+.sheet.orc-sheet { z-index: 30; }
 .mes-hint {
   margin-top: 10px;
   font-size: 11px;
