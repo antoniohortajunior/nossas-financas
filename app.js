@@ -1,4 +1,4 @@
-const APP_VERSION = "67";
+const APP_VERSION = "68";
 /** Primeira linha de lançamentos nas abas Despesas / Alasca / Gastos Viagem (cabeçalho na linha 4). */
 const DESP_DATA_START = 5;
 const VIAGENS_SHEET = "Viagens";
@@ -2218,7 +2218,7 @@ function categoriasView() {
       <div class="topbar">
         <div class="title" style="margin-top:0">Categorias</div>
         <div class="topbar-actions">
-          <button class="linkish" id="btnReloadCat">${state.loading ? "…" : "Atualizar"}</button>
+          <button type="button" class="linkish" id="btnReloadCat">${state.loading ? "…" : "Atualizar"}</button>
         </div>
       </div>
       <p class="muted" style="font-size:12px;margin-top:6px">Toque para editar nome, orçamento e se a categoria é de Despesas ou Alasca.</p>
@@ -2568,7 +2568,7 @@ function painelView(m) {
         <div class="topbar-actions">
           <button type="button" class="btn-orc-mini" id="btnOrcamento">Categorias</button>
           ${renderFullscreenBarBtn()}
-          <button class="linkish" id="btnReload">${state.loading ? "Atualizando…" : "Atualizar"}</button>
+          <button type="button" class="linkish" id="btnReload">${state.loading ? "Atualizando…" : "Atualizar"}</button>
         </div>
       </div>
       <div class="period-row">
@@ -3422,7 +3422,49 @@ function bindRootActions() {
   const root = document.getElementById("root");
   if (!root || root.dataset.actionsBound) return;
   root.dataset.actionsBound = "1";
-  root.addEventListener("click", (e) => {
+  const onRootTap = (e) => {
+    const reloadBtn = e.target.closest("#btnReload, #btnReloadCat");
+    if (reloadBtn) {
+      e.preventDefault();
+      if (!state.loading) refresh();
+      return;
+    }
+    const painelPeriodBtn = e.target.closest("#btnPainelPeriod");
+    if (painelPeriodBtn) {
+      e.preventDefault();
+      const de = document.getElementById("painelDe");
+      const ate = document.getElementById("painelAte");
+      const vs = document.getElementById("painelViagemSel");
+      if (de) state.painelDe = de.value;
+      if (ate) state.painelAte = ate.value;
+      if (vs) state.painelViagem = vs.value || "";
+      savePainelPeriodToStore();
+      render();
+      return;
+    }
+    const saveDesp = e.target.closest("#saveBtn");
+    if (saveDesp) {
+      e.preventDefault();
+      saveSheet();
+      return;
+    }
+    const fabBtn = e.target.closest("#fab, #fabAlaska, #fabGastoViagem, #fabRec");
+    if (fabBtn) {
+      e.preventDefault();
+      const id = fabBtn.id;
+      if (id === "fabAlaska") openNew("alasca");
+      else if (id === "fabGastoViagem") openNew("gastoviagem");
+      else if (id === "fabRec") openNew("receita");
+      else openNew("despesa");
+      return;
+    }
+    const closeDesp = e.target.closest("#closeSheet");
+    if (closeDesp) {
+      e.preventDefault();
+      state.sheetOpen = false;
+      render();
+      return;
+    }
     const sortBtn = e.target.closest("[data-sort]");
     if (sortBtn) {
       e.preventDefault();
@@ -3483,6 +3525,7 @@ function bindRootActions() {
     }
     const tabBtn = e.target.closest("[data-tab]");
     if (tabBtn) {
+      e.preventDefault();
       state.tab = tabBtn.dataset.tab;
       state.sheetOpen = false;
       state.orcamentoOpen = false;
@@ -3534,7 +3577,8 @@ function bindRootActions() {
         deleteExpense(state.deleteConfirm.row, state.deleteConfirm.kind || "despesa");
       }
     }
-  });
+  };
+  root.addEventListener("click", onRootTap);
 }
 
 function bind() {
@@ -3576,7 +3620,6 @@ function bind() {
     }
   });
 
-  on("btnReload", "click", () => refresh());
   on("btnOrcamento", "click", () => {
     state.tab = "categorias";
     state.orcamentoOpen = false;
@@ -3585,7 +3628,6 @@ function bind() {
     render();
   });
   on("btnNovaCategoria", "click", openNewCategoria);
-  on("btnReloadCat", "click", () => refresh());
   on("closeCatSheet", "click", () => {
     state.categoriaSheetOpen = false;
     render();
@@ -3601,10 +3643,6 @@ function bind() {
     state.orcamentoOpen = false;
     render();
   });
-  on("fab", "click", () => openNew("despesa"));
-  on("fabAlaska", "click", () => openNew("alasca"));
-  on("fabGastoViagem", "click", () => openNew("gastoviagem"));
-  on("fabRec", "click", () => openNew("receita"));
   on("btnNovaViagem", "click", () => openNewViagem());
   on("closeViagemSheet", "click", () => {
     state.viagemSheetOpen = false;
@@ -3621,20 +3659,6 @@ function bind() {
   on("painelViagemSel", "change", (e) => {
     state.painelViagem = e.target.value || "";
     savePainelPeriodToStore();
-    render();
-  });
-  on("btnPainelPeriod", "click", () => {
-    const de = document.getElementById("painelDe");
-    const ate = document.getElementById("painelAte");
-    const vs = document.getElementById("painelViagemSel");
-    if (de) state.painelDe = de.value;
-    if (ate) state.painelAte = ate.value;
-    if (vs) state.painelViagem = vs.value || "";
-    savePainelPeriodToStore();
-    render();
-  });
-  on("closeSheet", "click", () => {
-    state.sheetOpen = false;
     render();
   });
   on("moreBtn", "click", () => {
@@ -3664,7 +3688,6 @@ function bind() {
     }
     render();
   });
-  on("saveBtn", "click", saveSheet);
   on("q", "input", (e) => {
     state.query = e.target.value;
     render();

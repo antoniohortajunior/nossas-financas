@@ -1,4 +1,4 @@
-const CACHE = "minhas-financas-v67";
+const CACHE = "minhas-financas-v68";
 
 self.addEventListener("install", (e) => {
   self.skipWaiting();
@@ -14,22 +14,25 @@ self.addEventListener("activate", (e) => {
   );
 });
 
-async function networkFirst(request) {
-  try {
-    const res = await fetch(request, { cache: "no-store" });
-    if (res.ok) {
-      const cache = await caches.open(CACHE);
-      cache.put(request, res.clone());
-    }
-    return res;
-  } catch {
-    const hit = await caches.match(request);
-    if (hit) return hit;
-    throw new Error("offline");
-  }
+function isAppShellAsset(url) {
+  const p = url.pathname;
+  return (
+    p.endsWith(".js") ||
+    p.endsWith(".css") ||
+    p.endsWith(".html") ||
+    p.endsWith("planilha.json") ||
+    url.search.includes("v=")
+  );
 }
 
 self.addEventListener("fetch", (e) => {
   if (e.request.method !== "GET") return;
-  e.respondWith(networkFirst(e.request));
+  const url = new URL(e.request.url);
+  if (isAppShellAsset(url)) {
+    e.respondWith(fetch(e.request, { cache: "no-store" }));
+    return;
+  }
+  e.respondWith(
+    fetch(e.request, { cache: "no-store" }).catch(() => caches.match(e.request))
+  );
 });
