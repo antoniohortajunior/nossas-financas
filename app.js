@@ -1,4 +1,4 @@
-const APP_VERSION = "74";
+const APP_VERSION = "75";
 /** Primeira linha de lançamentos nas abas Despesas / Alasca / Gastos Viagem (cabeçalho na linha 4). */
 const DESP_DATA_START = 5;
 const VIAGENS_SHEET = "Viagens";
@@ -707,33 +707,39 @@ function workMonthBounds() {
   return { start, end };
 }
 
-function ymFromIsoField(iso) {
-  const s = String(iso || "").slice(0, 10);
-  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s.slice(0, 7) : "";
+function isoDatePrefix(v) {
+  const iso = serialToISO(v);
+  if (iso && /^\d{4}-\d{2}-\d{2}/.test(iso)) return iso.slice(0, 10);
+  return "";
 }
 
 /**
- * Mês de trabalho para listas (Despesas / Alasca).
- * Prioriza vencimento: na planilha a competência costuma repetir o mês de Config em todas as linhas.
+ * Filtro das abas Despesas e Alasca (mês de Config B5/B6).
+ * Se há vencimento, só ele conta — nunca cai na competência repetida na planilha.
  */
-function expenseInWorkMonth(d) {
+function expenseInListMonth(d) {
   const want = workMonthKey();
   if (!want) return false;
-  const vYm = ymFromIsoField(d.vencimento);
-  if (vYm) return vYm === want;
-  const cYm = ymFromIsoField(d.competencia);
-  if (cYm) return cYm === want;
-  if (d.pago) {
-    const pYm = ymFromIsoField(d.dataPagamento);
-    if (pYm) return pYm === want;
-  }
-  const rawYm = ym(d.competencia) || cellYM(d.competenciaRaw);
+  const vIso = isoDatePrefix(d.vencimento);
+  if (vIso) return vIso.slice(0, 7) === want;
+  if (String(d.vencimento ?? "").trim() !== "") return false;
+  const cIso = isoDatePrefix(d.competencia);
+  if (cIso) return cIso.slice(0, 7) === want;
+  const rawYm = cellYM(d.competenciaRaw);
   if (rawYm) return rawYm === want;
-  return transactionMonthKey(d) === want;
+  if (d.pago) {
+    const pIso = isoDatePrefix(d.dataPagamento);
+    if (pIso) return pIso.slice(0, 7) === want;
+  }
+  return false;
+}
+
+function expenseInWorkMonth(d) {
+  return expenseInListMonth(d);
 }
 
 function inWorkMonth(d) {
-  return expenseInWorkMonth(d);
+  return expenseInListMonth(d);
 }
 
 function isSummaryRow(descricao, joined) {
@@ -1207,11 +1213,11 @@ async function refresh() {
 }
 
 function monthDespesas() {
-  return state.despesas.filter(expenseInWorkMonth);
+  return state.despesas.filter(expenseInListMonth);
 }
 
 function monthAlaska() {
-  return state.alaskaDespesas.filter(expenseInWorkMonth);
+  return state.alaskaDespesas.filter(expenseInListMonth);
 }
 
 /** Gastos de viagem costumam cair fora do “mês de trabalho” da planilha — lista tudo e filtra só na busca/filtros. */
@@ -2828,7 +2834,12 @@ function mesView() {
 }
 
 function despesasView() {
-  const sub = state.mes && state.ano ? `Lançamentos de ${state.mes} de ${state.ano}` : "Lançamentos do mês";
+  const n = monthDespesas().length;
+  const total = state.despesas.length;
+  const sub =
+    state.mes && state.ano
+      ? `Lançamentos de ${state.mes} de ${state.ano} · ${n} no mês (${total} na planilha)`
+      : `Lançamentos do mês · ${n} no mês`;
   return expenseTabView({
     kind: "despesa",
     subtitle: sub,
