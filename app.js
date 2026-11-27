@@ -1,4 +1,4 @@
-const APP_VERSION = "68";
+const APP_VERSION = "71";
 /** Primeira linha de lançamentos nas abas Despesas / Alasca / Gastos Viagem (cabeçalho na linha 4). */
 const DESP_DATA_START = 5;
 const VIAGENS_SHEET = "Viagens";
@@ -1108,10 +1108,23 @@ async function loadFluxoSheet() {
 }
 
 async function refresh() {
+  if (state._refreshInFlight) {
+    state._refreshQueued = true;
+    return;
+  }
+  state._refreshInFlight = true;
   state.loading = true;
   state.error = "";
   state.hint = "";
   render();
+  const watchdog = setTimeout(() => {
+    if (state._refreshInFlight) {
+      state._refreshInFlight = false;
+      state.loading = false;
+      showToast("Atualização demorou. Verifique a internet e toque Atualizar de novo.");
+      render();
+    }
+  }, 45000);
   try {
     const data = await batchGetRanges([
       "Config!B4:B14",
@@ -1151,10 +1164,17 @@ async function refresh() {
       state.hint = `${state.despesas.length} linha(s) na planilha, ${monthCount} no mês ${state.mes}/${state.ano}. Confira Config (B5/B6) e Competência ou Vencimento.`;
     }
   } catch (err) {
-    state.error = err.message;
+    state.error = err.message || String(err);
+    showToast(state.error);
   } finally {
+    clearTimeout(watchdog);
+    state._refreshInFlight = false;
     state.loading = false;
     render();
+    if (state._refreshQueued) {
+      state._refreshQueued = false;
+      refresh();
+    }
   }
 }
 
@@ -2007,7 +2027,7 @@ function loginView() {
         <h1>Entrar</h1>
         <p>Toque abaixo para abrir com sua conta Google. Na primeira vez, o Google pede permissão; depois entra direto.</p>
         <p class="error" id="setupErr">${esc(state.error)}</p>
-        <button class="save" id="btnConnect" style="margin:18px 0 0;width:100%">Entrar com Google</button>
+        <button type="button" class="save" id="btnConnect" style="margin:18px 0 0;width:100%">Entrar com Google</button>
       </div>
     </div>`;
 }
@@ -2218,7 +2238,7 @@ function categoriasView() {
       <div class="topbar">
         <div class="title" style="margin-top:0">Categorias</div>
         <div class="topbar-actions">
-          <button type="button" class="linkish" id="btnReloadCat">${state.loading ? "…" : "Atualizar"}</button>
+          <button type="button" class="linkish" data-refresh id="btnReloadCat">${state.loading ? "…" : "Atualizar"}</button>
         </div>
       </div>
       <p class="muted" style="font-size:12px;margin-top:6px">Toque para editar nome, orçamento e se a categoria é de Despesas ou Alasca.</p>
@@ -2246,7 +2266,7 @@ function categoriaSheetView() {
           <option value="alasca" ${normalizeCatVinculo(f.vinculo) === "alasca" ? "selected" : ""}>Alasca</option>
         </select></div>
       </div>
-      <button class="save" id="saveCatBtn">${state.loading ? "Salvando…" : "Salvar na planilha"}</button>
+      <button type="button" class="save" id="saveCatBtn">${state.loading ? "Salvando…" : "Salvar na planilha"}</button>
     </div>`;
 }
 
@@ -2290,7 +2310,10 @@ function minhasViagensView() {
   return `
     <div class="scroll">
       <div class="hello">Cadastro de viagens</div>
-      <div class="title">Minhas Viagens</div>
+      <div class="title-row">
+        <div class="title">Minhas Viagens</div>
+        <button type="button" class="linkish" data-refresh>${state.loading ? "…" : "Atualizar"}</button>
+      </div>
       <p class="muted" style="font-size:12px;margin-top:6px">Defina nome, período e gasto previsto. Os lançamentos ficam em Gastos na Viagem.</p>
       <button type="button" class="save" id="btnNovaViagem" style="margin-top:14px">Nova viagem</button>
       ${rows || `<div class="empty" style="margin-top:16px">Nenhuma viagem cadastrada.</div>`}
@@ -2316,7 +2339,7 @@ function viagemCadastroSheetView() {
         </div>
         <div class="field"><label>Gasto total previsto (R$)</label><input id="fViagemPrev" inputmode="decimal" value="${esc(f.previsto)}" placeholder="0,00" /></div>
       </div>
-      <button class="save" id="saveViagemBtn">${state.loading ? "Salvando…" : "Salvar na planilha"}</button>
+      <button type="button" class="save" id="saveViagemBtn">${state.loading ? "Salvando…" : "Salvar na planilha"}</button>
     </div>`;
 }
 
@@ -2340,6 +2363,7 @@ function expenseTabView({ kind, subtitle, title, fabId, scrollId, emptyMsg }) {
       <div class="title-row">
         <div class="title">${esc(title)}</div>
         <div class="sort-btns">
+          <button type="button" class="linkish" data-refresh>${state.loading ? "…" : "Atualizar"}</button>
           <button type="button" class="sort-btn ${state.despSort === "vencimento" ? "on" : ""}" data-sort="vencimento">vencto</button>
           <button type="button" class="sort-btn ${state.despSort === "pgto" ? "on" : ""}" data-sort="pgto">Pgto</button>
           <button type="button" class="sort-btn ${state.despSort === "valor" ? "on" : ""}" data-sort="valor">valor</button>
@@ -2348,14 +2372,14 @@ function expenseTabView({ kind, subtitle, title, fabId, scrollId, emptyMsg }) {
       </div>
       <input class="search" id="q" placeholder="Descrição, valor (ex.: 150,00) ou data (dd/mm/aa)" value="${esc(state.query)}" />
       <div class="chips">
-        <button class="chip ${state.filtro === "todas" ? "on" : ""}" data-filtro="todas">Todas</button>
-        <button class="chip ${state.filtro === "pagar" ? "on" : ""}" data-filtro="pagar">A pagar</button>
-        <button class="chip ${state.filtro === "atrasadas" ? "on" : ""}" data-filtro="atrasadas">Atrasadas</button>
+        <button type="button" class="chip ${state.filtro === "todas" ? "on" : ""}" data-filtro="todas">Todas</button>
+        <button type="button" class="chip ${state.filtro === "pagar" ? "on" : ""}" data-filtro="pagar">A pagar</button>
+        <button type="button" class="chip ${state.filtro === "atrasadas" ? "on" : ""}" data-filtro="atrasadas">Atrasadas</button>
         ${state.catFilter ? `<button type="button" class="chip chip-cat on" data-clear-cat>✕ ${esc(state.catFilter)}</button>` : ""}
       </div>
       ${list || `<div class="empty">${esc(emptyMsg)}</div>`}
     </div>
-    <button class="fab" id="${fabId}">+</button>`;
+    <button type="button" class="fab" id="${fabId}">+</button>`;
 }
 
 function fluxoDailyChartHtml(rows) {
@@ -2568,13 +2592,13 @@ function painelView(m) {
         <div class="topbar-actions">
           <button type="button" class="btn-orc-mini" id="btnOrcamento">Categorias</button>
           ${renderFullscreenBarBtn()}
-          <button type="button" class="linkish" id="btnReload">${state.loading ? "Atualizando…" : "Atualizar"}</button>
+          <button type="button" class="linkish" data-refresh id="btnReload">${state.loading ? "Atualizando…" : "Atualizar"}</button>
         </div>
       </div>
       <div class="period-row">
         <label class="period-field"><span>Início</span><input type="date" id="painelDe" value="${esc(start)}" /></label>
         <label class="period-field"><span>Fim</span><input type="date" id="painelAte" value="${esc(end)}" /></label>
-        <button type="button" class="period-go" id="btnPainelPeriod">Atualizar</button>
+        <button type="button" class="period-go" data-refresh id="btnPainelPeriod">Atualizar</button>
       </div>
       <div class="chips painel-fonte">
         <button type="button" class="chip ${state.painelFonte === "despesas" ? "on" : ""}" data-painel-fonte="despesas">Despesas</button>
@@ -2740,7 +2764,7 @@ function receitasView() {
       <div class="section">Lançamentos</div>
       ${list || `<div class="empty">Nenhuma receita neste mês. Toque no + para lançar.</div>`}
     </div>
-    <button class="fab" id="fabRec">+</button>`;
+    <button type="button" class="fab" id="fabRec">+</button>`;
 }
 
 function sheetView() {
@@ -2804,7 +2828,7 @@ function sheetView() {
           <label>Tipo de pgto</label>
           <select id="fTipoPgto">${options(L.pagamentos, f.tipoPgto)}</select>
         </div>
-        <button class="more" id="moreBtn">${state.moreOpen ? "Menos detalhes" : "Mais detalhes"}</button>
+        <button type="button" class="more" id="moreBtn">${state.moreOpen ? "Menos detalhes" : "Mais detalhes"}</button>
         <div class="${state.moreOpen ? "" : "hidden"}" id="extra">
           <div class="row2">
             <div class="field"><label>Tipo</label><select id="fTipo">${options(L.tipos, f.tipo)}</select></div>
@@ -2861,7 +2885,7 @@ function sheetView() {
         </div>
       </div>
       <div class="sheet-body">${body}</div>
-      <button class="save" id="saveBtn">${state.loading ? "Salvando…" : "Salvar na planilha"}</button>
+      <button type="button" class="save" id="saveBtn">${state.loading ? "Salvando…" : "Salvar na planilha"}</button>
       ${deleteOverlay}
     </div>`;
 }
@@ -3062,6 +3086,7 @@ async function resolveNewDespRow(sheetTitle, meta, rows) {
 }
 
 async function saveSheet() {
+  if (state._saveSheetBusy) return;
   readFormFromDom();
   const f = state.form;
   const isRec = state.sheetKind === "receita";
@@ -3216,6 +3241,7 @@ async function saveSheet() {
     showToast("Não foi possível montar a gravação na planilha. Toque Atualizar e tente de novo.");
     return;
   }
+  state._saveSheetBusy = true;
   state.loading = true;
   render();
   try {
@@ -3241,6 +3267,8 @@ async function saveSheet() {
     state.error = msg;
     showToast(msg);
     render();
+  } finally {
+    state._saveSheetBusy = false;
   }
 }
 
@@ -3418,28 +3446,208 @@ function showToast(msg) {
   }, 2400);
 }
 
-function bindRootActions() {
-  const root = document.getElementById("root");
-  if (!root || root.dataset.actionsBound) return;
-  root.dataset.actionsBound = "1";
-  const onRootTap = (e) => {
-    const reloadBtn = e.target.closest("#btnReload, #btnReloadCat");
-    if (reloadBtn) {
-      e.preventDefault();
-      if (!state.loading) refresh();
+function syncPainelPeriodFromDom() {
+  const de = document.getElementById("painelDe");
+  const ate = document.getElementById("painelAte");
+  const vs = document.getElementById("painelViagemSel");
+  if (de) state.painelDe = de.value;
+  if (ate) state.painelAte = ate.value;
+  if (vs) state.painelViagem = vs.value || "";
+  savePainelPeriodToStore();
+}
+
+function goFullscreenApp() {
+  enterFullscreen()
+    .then(() => showToast("Tela cheia ativada."))
+    .catch(() => showToast("Tela cheia indisponível neste navegador."));
+}
+
+async function doConnect() {
+  const err = document.getElementById("setupErr");
+  applyStoredConfig();
+  if (err) err.textContent = "";
+  state.error = "";
+  state.loading = true;
+  render();
+  try {
+    await ensureSession();
+    await refresh();
+  } catch (e) {
+    state.error = e.message;
+    state.token = null;
+    render();
+  } finally {
+    state.loading = false;
+    render();
+  }
+}
+
+function syncCatFormFromDom() {
+  const $ = (id) => document.getElementById(id);
+  if ($("fCatNome")) state.categoriaForm.nome = $("fCatNome").value;
+  if ($("fCatLimite")) state.categoriaForm.limite = $("fCatLimite").value;
+  if ($("fCatVinculo")) state.categoriaForm.vinculo = $("fCatVinculo").value;
+}
+
+function syncViagemFormFromDom() {
+  const $ = (id) => document.getElementById(id);
+  if ($("fViagemNome")) state.viagemCadastroForm.nome = $("fViagemNome").value;
+  if ($("fViagemIni")) state.viagemCadastroForm.inicio = $("fViagemIni").value;
+  if ($("fViagemFim")) state.viagemCadastroForm.fim = $("fViagemFim").value;
+  if ($("fViagemPrev")) state.viagemCadastroForm.previsto = $("fViagemPrev").value;
+}
+
+function doPagoSwitch() {
+  readFormFromDom();
+  const next = !state.form.pago;
+  if (next) {
+    const kind = state.sheetKind === "receita" ? "receita" : "despesa";
+    const trial = { ...state.form, pago: true };
+    const err = validatePagoRecebido(trial, kind);
+    if (err) {
+      showToast(err);
       return;
     }
-    const painelPeriodBtn = e.target.closest("#btnPainelPeriod");
-    if (painelPeriodBtn) {
+  }
+  state.form.pago = next;
+  if (state.form.pago && !state.form.realizado) state.form.realizado = state.form.previsto;
+  if (
+    state.form.pago &&
+    (state.sheetKind === "despesa" || state.sheetKind === "alasca" || state.sheetKind === "gastoviagem")
+  ) {
+    syncDespesaDatasPago(state.form);
+  }
+  render();
+}
+
+function bindFormInputs() {
+  if (window.__financasInputsBound) return;
+  window.__financasInputsBound = true;
+  document.addEventListener(
+    "input",
+    (e) => {
+      if (e.target.id !== "q") return;
+      state.query = e.target.value;
+      render();
+    },
+    true
+  );
+  document.addEventListener(
+    "keydown",
+    (e) => {
+      if (e.target.id !== "q" || e.key !== "Enter") return;
       e.preventDefault();
-      const de = document.getElementById("painelDe");
-      const ate = document.getElementById("painelAte");
-      const vs = document.getElementById("painelViagemSel");
-      if (de) state.painelDe = de.value;
-      if (ate) state.painelAte = ate.value;
-      if (vs) state.painelViagem = vs.value || "";
+      updateSearchHit();
+      if (state.searchHitRow) scrollToSearchHit();
+      else {
+        const q = state.query.trim();
+        if (isValueQuery(q)) showToast(`Nenhuma despesa com valor ≥ ${brl(num(q))}`);
+        else if (parseQueryDate(q)) showToast(`Nenhuma despesa com vencimento ≥ ${q}`);
+      }
+    },
+    true
+  );
+  document.addEventListener(
+    "change",
+    (e) => {
+      if (e.target.id !== "painelViagemSel") return;
+      state.painelViagem = e.target.value || "";
       savePainelPeriodToStore();
       render();
+    },
+    true
+  );
+}
+
+function bindRootActions() {
+  if (window.__financasActionsBound) return;
+  window.__financasActionsBound = true;
+  const onRootTap = (e) => {
+    const refreshBtn = e.target.closest("[data-refresh], #btnReload, #btnReloadCat, #btnPainelPeriod");
+    if (refreshBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (refreshBtn.id === "btnPainelPeriod" || refreshBtn.closest(".period-row")) {
+        syncPainelPeriodFromDom();
+      }
+      refresh();
+      return;
+    }
+    if (e.target.closest("#btnConnect")) {
+      e.preventDefault();
+      doConnect();
+      return;
+    }
+    if (e.target.closest("#btn-fullscreen, #btn-fullscreen-bar")) {
+      e.preventDefault();
+      goFullscreenApp();
+      return;
+    }
+    if (e.target.closest("#btn-dismiss-install")) {
+      e.preventDefault();
+      localStorage.setItem(INSTALL_HINT_KEY, "1");
+      document.getElementById("install-hint")?.remove();
+      return;
+    }
+    if (e.target.closest("#btnOrcamento")) {
+      e.preventDefault();
+      state.tab = "categorias";
+      state.orcamentoOpen = false;
+      state.sheetOpen = false;
+      state.categoriaSheetOpen = false;
+      render();
+      return;
+    }
+    if (e.target.closest("#btnNovaCategoria")) {
+      e.preventDefault();
+      openNewCategoria();
+      return;
+    }
+    if (e.target.closest("#closeCatSheet")) {
+      e.preventDefault();
+      state.categoriaSheetOpen = false;
+      render();
+      return;
+    }
+    if (e.target.closest("#saveCatBtn")) {
+      e.preventDefault();
+      syncCatFormFromDom();
+      saveCategoriaSheet();
+      return;
+    }
+    if (e.target.closest("#closeOrcamento")) {
+      e.preventDefault();
+      state.orcamentoOpen = false;
+      render();
+      return;
+    }
+    if (e.target.closest("#btnNovaViagem")) {
+      e.preventDefault();
+      openNewViagem();
+      return;
+    }
+    if (e.target.closest("#closeViagemSheet")) {
+      e.preventDefault();
+      state.viagemSheetOpen = false;
+      render();
+      return;
+    }
+    if (e.target.closest("#saveViagemBtn")) {
+      e.preventDefault();
+      syncViagemFormFromDom();
+      saveViagemCadastro();
+      return;
+    }
+    if (e.target.closest("#moreBtn")) {
+      e.preventDefault();
+      readFormFromDom();
+      state.moreOpen = !state.moreOpen;
+      render();
+      return;
+    }
+    if (e.target.closest("#pagoSwitch")) {
+      e.preventDefault();
+      doPagoSwitch();
       return;
     }
     const saveDesp = e.target.closest("#saveBtn");
@@ -3491,6 +3699,7 @@ function bindRootActions() {
     }
     const painelFonteBtn = e.target.closest("[data-painel-fonte]");
     if (painelFonteBtn) {
+      e.preventDefault();
       state.painelFonte = painelFonteBtn.dataset.painelFonte;
       if (state.painelFonte !== "viagem") state.painelViagem = "";
       savePainelPeriodToStore();
@@ -3499,6 +3708,7 @@ function bindRootActions() {
     }
     const viagemRowBtn = e.target.closest("[data-viagem-row]");
     if (viagemRowBtn) {
+      e.preventDefault();
       openViagemEdit(Number(viagemRowBtn.dataset.viagemRow));
       return;
     }
@@ -3520,7 +3730,7 @@ function bindRootActions() {
     const fluxDayBtn = e.target.closest("[data-flux-dia]");
     if (fluxDayBtn) {
       e.preventDefault();
-      if (!state.loading) toggleFluxoConsolidacao(fluxDayBtn.dataset.fluxDia);
+      toggleFluxoConsolidacao(fluxDayBtn.dataset.fluxDia);
       return;
     }
     const tabBtn = e.target.closest("[data-tab]");
@@ -3537,6 +3747,7 @@ function bindRootActions() {
     }
     const catRowBtn = e.target.closest("[data-cat-row]");
     if (catRowBtn) {
+      e.preventDefault();
       openCategoriaEdit(Number(catRowBtn.dataset.catRow));
       return;
     }
@@ -3547,16 +3758,19 @@ function bindRootActions() {
       !e.target.closest("[data-toggle-kind]") &&
       !e.target.closest("[data-toggle-rec]")
     ) {
+      e.preventDefault();
       openEdit(Number(itemBtn.dataset.row), itemBtn.dataset.kind || "despesa");
       return;
     }
     const toggleKindBtn = e.target.closest("[data-toggle-kind]");
     if (toggleKindBtn) {
+      e.preventDefault();
       togglePago(Number(toggleKindBtn.dataset.toggleRow), e, toggleKindBtn.dataset.toggleKind || "despesa");
       return;
     }
     const toggleRec = e.target.closest("[data-toggle-rec]");
     if (toggleRec) {
+      e.preventDefault();
       togglePago(Number(toggleRec.dataset.toggleRec), e, "receita");
       return;
     }
@@ -3578,131 +3792,12 @@ function bindRootActions() {
       }
     }
   };
-  root.addEventListener("click", onRootTap);
+  document.addEventListener("click", onRootTap, true);
 }
 
 function bind() {
   bindRootActions();
-  const on = (id, ev, fn) => {
-    const el = document.getElementById(id);
-    if (el) el.addEventListener(ev, fn);
-  };
-
-  const goFullscreen = () => {
-    enterFullscreen()
-      .then(() => showToast("Tela cheia ativada."))
-      .catch(() => showToast("Tela cheia indisponível neste navegador."));
-  };
-  on("btn-fullscreen", "click", goFullscreen);
-  on("btn-fullscreen-bar", "click", goFullscreen);
-  on("btn-dismiss-install", "click", () => {
-    localStorage.setItem(INSTALL_HINT_KEY, "1");
-    document.getElementById("install-hint")?.remove();
-  });
-
-  on("btnConnect", "click", async () => {
-    const err = document.getElementById("setupErr");
-    applyStoredConfig();
-    if (err) err.textContent = "";
-    state.error = "";
-    state.loading = true;
-    render();
-    try {
-      await ensureSession();
-      await refresh();
-    } catch (e) {
-      state.error = e.message;
-      state.token = null;
-      render();
-    } finally {
-      state.loading = false;
-      render();
-    }
-  });
-
-  on("btnOrcamento", "click", () => {
-    state.tab = "categorias";
-    state.orcamentoOpen = false;
-    state.sheetOpen = false;
-    state.categoriaSheetOpen = false;
-    render();
-  });
-  on("btnNovaCategoria", "click", openNewCategoria);
-  on("closeCatSheet", "click", () => {
-    state.categoriaSheetOpen = false;
-    render();
-  });
-  on("saveCatBtn", "click", () => {
-    const $ = (id) => document.getElementById(id);
-    if ($("fCatNome")) state.categoriaForm.nome = $("fCatNome").value;
-    if ($("fCatLimite")) state.categoriaForm.limite = $("fCatLimite").value;
-    if ($("fCatVinculo")) state.categoriaForm.vinculo = $("fCatVinculo").value;
-    saveCategoriaSheet();
-  });
-  on("closeOrcamento", "click", () => {
-    state.orcamentoOpen = false;
-    render();
-  });
-  on("btnNovaViagem", "click", () => openNewViagem());
-  on("closeViagemSheet", "click", () => {
-    state.viagemSheetOpen = false;
-    render();
-  });
-  on("saveViagemBtn", "click", () => {
-    const $ = (id) => document.getElementById(id);
-    if ($("fViagemNome")) state.viagemCadastroForm.nome = $("fViagemNome").value;
-    if ($("fViagemIni")) state.viagemCadastroForm.inicio = $("fViagemIni").value;
-    if ($("fViagemFim")) state.viagemCadastroForm.fim = $("fViagemFim").value;
-    if ($("fViagemPrev")) state.viagemCadastroForm.previsto = $("fViagemPrev").value;
-    saveViagemCadastro();
-  });
-  on("painelViagemSel", "change", (e) => {
-    state.painelViagem = e.target.value || "";
-    savePainelPeriodToStore();
-    render();
-  });
-  on("moreBtn", "click", () => {
-    readFormFromDom();
-    state.moreOpen = !state.moreOpen;
-    render();
-  });
-  on("pagoSwitch", "click", () => {
-    readFormFromDom();
-    const next = !state.form.pago;
-    if (next) {
-      const kind = state.sheetKind === "receita" ? "receita" : "despesa";
-      const trial = { ...state.form, pago: true };
-      const err = validatePagoRecebido(trial, kind);
-      if (err) {
-        showToast(err);
-        return;
-      }
-    }
-    state.form.pago = next;
-    if (state.form.pago && !state.form.realizado) state.form.realizado = state.form.previsto;
-    if (
-      state.form.pago &&
-      (state.sheetKind === "despesa" || state.sheetKind === "alasca" || state.sheetKind === "gastoviagem")
-    ) {
-      syncDespesaDatasPago(state.form);
-    }
-    render();
-  });
-  on("q", "input", (e) => {
-    state.query = e.target.value;
-    render();
-  });
-  on("q", "keydown", (e) => {
-    if (e.key !== "Enter") return;
-    e.preventDefault();
-    updateSearchHit();
-    if (state.searchHitRow) scrollToSearchHit();
-    else {
-      const q = state.query.trim();
-      if (isValueQuery(q)) showToast(`Nenhuma despesa com valor ≥ ${brl(num(q))}`);
-      else if (parseQueryDate(q)) showToast(`Nenhuma despesa com vencimento ≥ ${q}`);
-    }
-  });
+  bindFormInputs();
 }
 
 async function boot() {

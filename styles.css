@@ -430,6 +430,9 @@ body {
   font-weight: 600;
   color: var(--muted);
   font-family: inherit;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 .chip.on { background: var(--ink); color: #fff; border-color: var(--ink); }
 .item.search-hit {
@@ -451,6 +454,8 @@ body {
   font-family: inherit;
   color: inherit;
   cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 .sheet-head-actions {
   display: flex;
@@ -496,6 +501,9 @@ body {
   font-size: 12px; color: #fff;
   flex-shrink: 0;
   background: transparent;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 .check.yes { background: var(--teal); }
 .item .mid { flex: 1; min-width: 0; }
@@ -741,9 +749,16 @@ body {
 .hidden { display: none !important; }
 .muted { color: var(--muted); font-size: 13px; }
 .busy { opacity: 0.72; }
-.busy button:not(.save),
+.busy button:not(.save):not([data-refresh]):not(#btnReload):not(#btnReloadCat),
 .busy .fab {
   pointer-events: none;
+}
+.busy [data-refresh],
+.busy #btnReload,
+.busy #btnReloadCat,
+.busy #btnPainelPeriod {
+  pointer-events: auto;
+  opacity: 1;
 }
 .error { color: var(--rose); font-size: 13px; margin-top: 10px; }
 .install-hint {
